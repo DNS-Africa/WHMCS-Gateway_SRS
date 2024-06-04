@@ -1,5 +1,7 @@
 # WHMCS Module for Gateway SRS Domain Reseller Platform
 
+![logo.png](modules%2Fregistrars%2Fgateway_srs%2Flogo.png)
+
 ## Overview
 
 This document guides you through integrating the Gateway SRS Module with your WHMCS system. Ensure you follow the prerequisites and steps for a smooth installation and configuration process.
