@@ -70,4 +70,6 @@ For support, please contact [support@dns.business](mailto:support@dns.business).
 
 ### About Us
 
-DNS Africa Ltd is an ICANN accredited (#2287) and ISO/IEC 27001:2013 certified domain name Registrar and recognised, Domain Registry Service Provider. In addition to providing various specialist domain name-related services and products in Africa and Internationally, we also provide, maintain, and support our domain name reseller platform: Gateway SRS. . Learn more about us at [www.dns.business](http://www.dns.business) as well as [www.gatewaysrs.com.business](http://www.gatewaysrs.com).
+DNS Africa Ltd is an ICANN accredited (#2287) and ISO/IEC 27001:2013 certified domain name Registrar and recognised, Domain Registry Service Provider. In 
+addition to providing various specialist domain name-related services and products in Africa and Internationally, we also provide, maintain, and support our 
+domain name reseller platform: Gateway SRS.  Learn more about us at [www.dns.business](http://www.dns.business) as well as [www.gatewaysrs.com.business](http://www.gatewaysrs.com).
