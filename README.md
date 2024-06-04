@@ -43,7 +43,7 @@ To configure your WHMCS to use the Gateway SRS, follow these steps:
 2. Navigate to **Setup** menu > **Products/Services** > **Domain Registrars**.
 3. Activate the Gateway SRS module by clicking **Activate** next to it.
 4. Enter your DNS Portal account username and password. To test the module before going live simply enable "OTE Testing Mode".
-   ![Configuration Settings](configure.png)
+   ![Configuration Settings](Gateway SRS Module.png)
 
 ### Optional Settings
 If you encounter any issues, enable **Debug Mode** and check the logs at **Utilities > Logs > Module Log**. This setting ensures that only errors returned by the module are logged.
@@ -62,11 +62,11 @@ For support, please contact [support@dns.business](mailto:support@dns.business).
 
 1. Navigate to **Utilities** > **Registrar TLD Sync**.
 2. Select **SRS Gateway**.
-   ![tld_price_sync.png](tld_price_sync.png)
+   ![tld_price_sync.png](Gateway SRS Price and TLD Sync.png)
 3. Enable **Automatic Registration** and set the mark up and rounding options required
 4. Select desired domain extensions to import or go to the last tab and select all
-   ![tld_price_sync_2.png](tld_price_sync_2.png)
+   ![tld_price_sync_2.png](Gateway SRS Price and TLD Sync 2.png)
 
 ### About Us
 
-DNS Africa Ltd (DNSA) is a GBC1 private company incorporated in the Republic of Mauritius. It specializes in providing domain name services and domain registry solutions. DNS Africa Ltd is part of a broader network that includes Domain Name Services (Pty) Ltd (DNS-ZA), which was incorporated in 1998 in South Africa to offer specialist registry services for the CO.ZA domain name. Learn more about us at [www.dns.business](http://www.dns.business).
+DNS Africa Ltd is an ICANN accredited (#2287) and ISO/IEC 27001:2013 certified domain name Registrar and recognised, Domain Registry Service Provider. In addition to providing various specialist domain name-related services and products in Africa and Internationally, we also provide, maintain, and support our domain name reseller platform: Gateway SRS. . Learn more about us at [www.dns.business](http://www.dns.business) as well as [www.gatewaysrs.com.business](http://www.gatewaysrs.com).
