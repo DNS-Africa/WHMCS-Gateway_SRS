@@ -24,11 +24,11 @@ cd /var/www/html/
 ### Step 2: Download the SRS Gateway Module
 You can download the module using `wget` or `curl`:
 ```bash
-sudo wget -O gateway_srs.zip https://github.com/DNS-Africa/Gateway-WHMCS/raw/master/gateway_srs.zip
+sudo wget -O gateway_srs.zip https://github.com/DNS-Africa/WHMCS-Gateway_SRS/raw/main/gateway_srs.zip
 ```
 Or:
 ```bash
-sudo curl -Lo gateway_srs.zip https://github.com/DNS-Africa/Gateway-WHMCS/raw/master/gateway_srs.zip
+sudo curl -Lo gateway_srs.zip https://github.com/DNS-Africa/WHMCS-Gateway_SRS/raw/main/gateway_srs.zip
 ```
 
 ### Step 3: Extract the Module
