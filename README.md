@@ -62,10 +62,10 @@ For support, please contact [support@dns.business](mailto:support@dns.business).
 
 1. Navigate to **Utilities** > **Registrar TLD Sync**.
 2. Select **SRS Gateway**.
-   ![tld_price_sync.png](Gateway SRS Price and TLD Sync.png)
+   ![Gateway SRS Module.png](Gateway SRS Price and TLD Sync.png)
 3. Enable **Automatic Registration** and set the mark up and rounding options required
 4. Select desired domain extensions to import or go to the last tab and select all
-   ![tld_price_sync_2.png](Gateway SRS Price and TLD Sync 2.png)
+   ![Gateway SRS Price and TLD Sync.png](Gateway SRS Price and TLD Sync 2.png)
 
 ### About Us
 
