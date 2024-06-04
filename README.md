@@ -63,7 +63,8 @@ For support, please contact [support@dns.business](mailto:support@dns.business).
 ## Synchronise available domain extensions and pricing
 
 1. Navigate to **Utilities** > **Registrar TLD Sync**.
-2. Select **SRS Gateway**.![Gateway SRS Price and TLD Sync.png](Gateway%20SRS%20Price%20and%20TLD%20Sync.png)
+2. Select **SRS Gateway**.
+![Gateway SRS Price and TLD Sync.png](Gateway%20SRS%20Price%20and%20TLD%20Sync.png)
 3. Enable **Automatic Registration** and set the mark up and rounding options required
 4. Select desired domain extensions to import or go to the last tab and select all
 
