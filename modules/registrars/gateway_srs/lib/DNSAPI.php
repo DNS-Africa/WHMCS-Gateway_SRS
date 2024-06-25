@@ -174,7 +174,7 @@
 
             $return = $this->execCH($ch);
             if ($this->debug) {
-            //    logModuleCall('dns_gateway',"getdata",$url,$return);
+            //    logModuleCall('gateway_srs',"getdata",$url,$return);
             }
             return $return;
         }
@@ -206,7 +206,7 @@
 
             if($this->debug) 
             {
-               // logModuleCall('dns_gateway',"putCH",$post_data,$return);
+               // logModuleCall('gateway_srs',"putCH",$post_data,$return);
             }
             return $return;
         }
@@ -247,7 +247,7 @@
 
             $return = $this->execCH($ch);
             if ($this->debug) {
-                //logModuleCall('dns_gateway',"postCH".$url,$post_data,$return);
+                //logModuleCall('gateway_srs',"postCH".$url,$post_data,$return);
             }
             return $return;
         }
@@ -272,7 +272,7 @@
 
             /** Add error to error log */
             if ($this->debug) {
-                logModuleCall('dns_gateway',"execCH1", static::class . '::execCH >> ' .
+                logModuleCall('gateway_srs',"execCH1", static::class . '::execCH >> ' .
                     curl_getinfo($ch, CURLINFO_EFFECTIVE_URL) . ' up:' .
                     curl_getinfo($ch, CURLINFO_SIZE_UPLOAD) . ' down:' .
                     curl_getinfo($ch, CURLINFO_SIZE_DOWNLOAD) .
@@ -280,10 +280,10 @@
             }
 
             if ($this->debug) {
-                logModuleCall('dns_gateway',"execCH2", static::class . '::execCH >> ' . $output . " Headers:" . curl_getinfo($ch, CURLINFO_HEADER_OUT ), $output);
+                logModuleCall('gateway_srs',"execCH2", static::class . '::execCH >> ' . $output . " Headers:" . curl_getinfo($ch, CURLINFO_HEADER_OUT ), $output);
             }
 
-            syslog(LOG_DEBUG, "dns_gateway:". static::class . '::execCH >> ' .
+            syslog(LOG_DEBUG, "gateway_srs:". static::class . '::execCH >> ' .
                 curl_getinfo($ch, CURLINFO_EFFECTIVE_URL) . ' up:' .
                 curl_getinfo($ch, CURLINFO_SIZE_UPLOAD) . ' down:' .
                 curl_getinfo($ch, CURLINFO_SIZE_DOWNLOAD) .

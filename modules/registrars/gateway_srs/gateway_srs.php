@@ -458,8 +458,7 @@
                 $count++;
                 $nameservers['ns' . $count] = $namserver['hostname'];
             }
-            logModuleCall('dns_gateway', 'GetNameservers', $params, $domain_info);
-            $nameservererror = 'Some message here!';
+            logModuleCall('gateway_srs', 'GetNameservers', $params, $domain_info);
             return $nameservers;
 
         } catch (\Exception $e) {
@@ -783,7 +782,7 @@
                 }
             }
 
-            logModuleCall('dns_gateway', 'GetRegistrarLock', $params, $domain_sync);
+            logModuleCall('gateway_srs', 'GetRegistrarLock', $params, $domain_sync);
 
             if ($domain_lock == true) {
                 return 'locked';
