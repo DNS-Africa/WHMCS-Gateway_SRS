@@ -118,11 +118,15 @@
     {
         //throw new InvalidConfiguration("to alert the UI if not correct.");
         try {
-
             new DNSAPI($params);
         } catch (Exception $e) {
             throw new InvalidConfiguration($e->getMessage());
         }
+        // Update the previous registrar name to the new module name
+        $pdo = WHMCS\Database\Capsule::connection()->getPdo();
+        $query = $pdo->prepare("UPDATE tbldomains SET registrar = 'gateway_srs' WHERE registrar like '%ns_gateway'");
+        $query->execute();
+
         return NULL;
     }
 
@@ -814,7 +818,7 @@
             } else {
                 $api->unlock($domain);
             }
-
+            return ['success' => 'success'];
         } catch (\Exception $e) {
             return [
                 'error' => $e->getMessage()
