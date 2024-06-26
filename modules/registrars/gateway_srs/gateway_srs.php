@@ -498,12 +498,11 @@
 
 
             // Grab Domain Info
-            $domain_list = $api->list_domains($domain);
-            $domain_view = $api->view_domain($domain_list[0]['wid']);
+            $domain_view = $api->get_domain_nameservers($domain);
 
 
             // Handle Nameservers
-            $hosts = $domain_view['hosts'];
+            $hosts = $domain_view['nameservers'];
             $new_hosts = [];
 
             for ($n = 1; $n <= 5; $n++) {
@@ -529,12 +528,12 @@
                 'period_unit' => 'y',
                 'authinfo' => $api->generate_password($domain),
                 'hosts' => $new_hosts,
-                'contacts' => $domain_view['contacts'],
+                'contacts' => $api->get_domain_contacts($domain)["contacts"],
             ];
-
-            $api->update_domain($update_array, $domain_list[0]['wid']);
-
-            return true;
+            $domain_wid = $api->get_domain_wid($domain);
+            $api->update_domain($update_array, $domain_wid);
+            syslog(LOG_DEBUG, "Nameserver update");
+            return ['success' => 'success'];
 
         } catch (\Exception $e) {
             return [
@@ -672,9 +671,7 @@
                 $api->update_contact($contact_info, $api_contact['wid']);
             }
 
-            return [
-                'success' => true
-            ];
+            return ['success' => 'success'];
 
         } catch (\Exception $e) {
             return [
