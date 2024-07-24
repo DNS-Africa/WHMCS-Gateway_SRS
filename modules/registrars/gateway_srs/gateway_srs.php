@@ -126,7 +126,7 @@
         $pdo = WHMCS\Database\Capsule::connection()->getPdo();
         $query = $pdo->prepare("UPDATE tbldomains SET registrar = 'gateway_srs' WHERE registrar like '%ns_gateway'");
         $query->execute();
-        $query = $pdo->prepare("UPDATE tbldomainpricing SET autoreg = 'gateway_srs' WHERE registrar like '%ns_gateway'");
+        $query = $pdo->prepare("UPDATE tbldomainpricing SET registrar = 'gateway_srs' WHERE registrar like '%ns_gateway'");
         $query->execute();
         return NULL;
     }
@@ -1260,7 +1260,7 @@
                 ];
 
                 if ($tld != 'co.za') {
-                    dns_gateway_Update_EPP_key($params);
+                    gateway_srs_Update_EPP_key($params);
                 }
                 update_autorenew($params);
 
@@ -1273,7 +1273,7 @@
             }
 
         } catch (\Exception $e) {
-            return dns_gateway_TransferStatusUpdate($params['domainid'], $e->getMessage());
+            return gateway_srs_TransferStatusUpdate($params['domainid'], $e->getMessage());
         }
     }
 

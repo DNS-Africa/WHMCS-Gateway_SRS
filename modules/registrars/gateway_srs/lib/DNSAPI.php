@@ -391,7 +391,7 @@
         {
             $characters = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
             if ($use_special_chars)
-                $characters .= "?!@#\$%^&*()";
+                $characters .= "?!@#\$%^*()";
             $random_string = '';
             while (strlen($random_string)<$length) {
                 $random_string .= $characters[rand(0, strlen($characters))];
