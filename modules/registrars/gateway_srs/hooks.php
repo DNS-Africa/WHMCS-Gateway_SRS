@@ -5,7 +5,7 @@
 
     use WHMCS\View\Menu\Item as MenuItem;
     use WHMCS\Database\Capsule;
-    use \WHMCS\Module\Registrar\dns_gateway\DNSAPI;
+    use \WHMCS\Module\Registrar\gateway_srs\DNSAPI;
 
     add_hook('ClientAreaPrimarySidebar', 1, function(MenuItem $primarySidebar) {
 
