@@ -29,9 +29,9 @@
             $module = new WHMCS\Module\Registrar();
             if($module)
             {
-                if (!$module->load('dns_gateway'))
+                if (!$module->load('gateway_srs'))
                 {
-                    throw new Exception("Could not load dns_gateway registrar.");
+                    throw new Exception("Could not load gateway_srs registrar.");
                 }
                 $settings = $module->getSettings();
                 syslog(LOG_INFO, "HOOKS: DomainValidation \$_POST: " . json_encode($settings));
@@ -118,7 +118,7 @@
         );
         $result = localAPI($command, $postData);
 
-        $registrarModuleName = 'dns_gateway';
+        $registrarModuleName = 'gateway_srs';
 
         foreach (Capsule::table('tblregistrars')
             ->where('registrar', $registrarModuleName)
@@ -155,7 +155,7 @@
             );
 
         $registrant_contact = $api->setcontact($registrant_info);
-        logModuleCall('dns_gateway','hook','contact set - '.$vars['domain'],$registrant_contact);
+        logModuleCall('gateway_srs','hook','contact set - '.$vars['domain'],$registrant_contact);
     });
 
 
