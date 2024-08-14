@@ -126,7 +126,7 @@
         $pdo = WHMCS\Database\Capsule::connection()->getPdo();
         $query = $pdo->prepare("UPDATE tbldomains SET registrar = 'gateway_srs' WHERE registrar like '%ns_gateway'");
         $query->execute();
-        $query = $pdo->prepare("UPDATE tbldomainpricing SET registrar = 'gateway_srs' WHERE registrar like '%ns_gateway'");
+        $query = $pdo->prepare("UPDATE tbldomainpricing SET autoreg = 'gateway_srs' WHERE autoreg like '%ns_gateway'");
         $query->execute();
         return NULL;
     }
