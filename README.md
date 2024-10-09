@@ -9,7 +9,7 @@ This document guides you through integrating the Gateway SRS Module with your WH
 ## Prerequisites
 
 - Access to the WHMCS admin area.
-- An active Gateway account with API access. Register at [https://portal.dns.business](https://portal.dns.business), accept the terms and conditions, and then request live or OT&E server credentials.
+- An active Gateway account with API access. Register at [https://portal.gatewaysrs.com](https://portal.gatewaysrs.com), accept the terms and conditions, and then request live or OT&E server credentials.
 
 **Note**: DNS Gateway provides both a production environment and a test environment (OT&E). It is advisable to initially set up and test the WHMCS Registrar module in the OT&E environment before moving to the LIVE/PRODUCTION environment.
 

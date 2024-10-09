@@ -79,7 +79,7 @@
                 $this->registry_api_url = "https://srs-epp.dns.net.za/api/";
                 $this->portal_api_url = "https://srs-epp.dns.net.za/portal/";
             } else {
-                $this->registry_api_url = "https://gateway-otande.dns.net.za:8443/api/";
+                $this->registry_api_url = "https://gateway-otande.dns.net.za/api/";
                 $this->portal_api_url = "https://srs-epp.dns.net.za/portal/";
             }
 
