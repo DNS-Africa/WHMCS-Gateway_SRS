@@ -83,7 +83,7 @@
                 'Type' => 'text',
                 'Size' => '25',
                 'Default' => '',
-                'Description' => 'Username for https://portal.dns.business/'
+                'Description' => 'Username for https://portal.gatewaysrs.com/'
             ],
             'Portal_Password' => [
                 'FriendlyName' => 'Password',
@@ -720,7 +720,6 @@
                 }
 
                 $searchResult->setStatus($status);
-                $results->append($searchResult);
 
                 // Return premium information if applicable
                 if ($domain_check['charge']['category'] != "standard") {
@@ -733,15 +732,13 @@
                         'CurrencyCode' => 'USD'
                     ]);
                 }
-
-                if (strtolower($domain_check['results'][0]['reason']) == 'in use') {
-                    $domain_check['results'][0]['reason'] = 'Domain exists';
-                }
+                $results->append($searchResult);
             }
 
             return $results;
 
         } catch (\Exception $e) {
+            logModuleCall('gateway_srs', 'CheckAvailability', $params, $e->getMessage());
             return array(
                 'error' => $e->getMessage()
             );
@@ -1248,7 +1245,9 @@
 
             if (isset($domain_transfer_in[0]['wid']) or isset($domain_transfer_out[0]['wid'])) {
                 // Still pending transfer
-                return [];
+                return [
+                    'completed' => false
+                ];
             }
 
             if (isset($domain_list[0]['wid'])) {
@@ -1273,7 +1272,7 @@
             }
 
         } catch (\Exception $e) {
-            return gateway_srs_TransferStatusUpdate($params['domainid'], $e->getMessage());
+                return gateway_srs_TransferStatusUpdate($params['domainid'], $e->getMessage());
         }
     }
 
