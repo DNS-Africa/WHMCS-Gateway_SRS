@@ -387,32 +387,41 @@
         /**
          * @param bool $use_special_chars
          */
-        static public function RandomString($length, $use_special_chars = False): string
+
+
+        static public function RandomString(int $length, bool $use_special_chars = false): string
         {
-            $characters = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
-            $digits = '0123456789';
-            if ($use_special_chars)
-                $digits .= "?!@#%^*()";
-            $random_string = '';
-            while (strlen($random_string)<$length) {
-                if ($length($random_string) % 2 == 0) {
-                    $random_string .= $characters[rand(0, strlen($characters))];
-                } else {
-                    $random_string .= $digits[rand(0, strlen($digits))];
-                }
+            $alpha = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+            $numeric = '0123456789';
+            $special = '?!@#%^*()';
+
+            $password = '';
+
+            // Ensure at least one alpha character
+            $password .= $alpha[random_int(0, strlen($alpha) - 1)];
+
+            // Ensure at least one numeric character
+            $password .= $numeric[random_int(0, strlen($numeric) - 1)];
+
+            if ($use_special_chars) {
+                // Ensure at least one special character
+                $password .= $special[random_int(0, strlen($special) - 1)];
             }
 
-            // Ensure special characters are included.
-            if ($use_special_chars){
-                if (preg_match('/[a-zA-Z0-9]+$/', $random_string)){
-                    $random_string = DNSAPI::RandomString($length, $use_special_chars);
-                }
+            $remainingLength = $length - strlen($password);
+
+            $allChars = $alpha . $numeric;
+            if ($use_special_chars) {
+                $allChars .= $special;
             }
-            // Ensure the string contains a number
-            if (preg_match('~[0-9]+~', $random_string)){
-                $random_string = DNSAPI::RandomString($length, $use_special_chars);
+
+            for ($i = 0; $i < $remainingLength; $i++) {
+                $password .= $allChars[random_int(0, strlen($allChars) - 1)];
             }
-            return $random_string;
+
+            $password = str_shuffle($password);
+
+            return $password;
         }
 
         public function generate_id($domain): string
