@@ -389,12 +389,17 @@
          */
         static public function RandomString($length, $use_special_chars = False): string
         {
-            $characters = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+            $characters = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+            $digits = '0123456789';
             if ($use_special_chars)
-                $characters .= "?!@#\$%^*()";
+                $digits .= "?!@#%^*()";
             $random_string = '';
             while (strlen($random_string)<$length) {
-                $random_string .= $characters[rand(0, strlen($characters))];
+                if ($length($random_string) % 2 == 0) {
+                    $random_string .= $characters[rand(0, strlen($characters))];
+                } else {
+                    $random_string .= $digits[rand(0, strlen($digits))];
+                }
             }
 
             // Ensure special characters are included.
@@ -402,6 +407,10 @@
                 if (preg_match('/[a-zA-Z0-9]+$/', $random_string)){
                     $random_string = DNSAPI::RandomString($length, $use_special_chars);
                 }
+            }
+            // Ensure the string contains a number
+            if (preg_match('~[0-9]+~', $random_string)){
+                $random_string = DNSAPI::RandomString($length, $use_special_chars);
             }
             return $random_string;
         }

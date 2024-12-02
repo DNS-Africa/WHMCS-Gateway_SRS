@@ -1272,7 +1272,7 @@
             }
 
         } catch (\Exception $e) {
-                return gateway_srs_TransferStatusUpdate($params['domainid'], $e->getMessage());
+            return gateway_srs_TransferStatusUpdate($params['domainid'], $e->getMessage());
         }
     }
 
