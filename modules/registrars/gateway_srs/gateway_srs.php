@@ -341,39 +341,46 @@
         // Connect To API
         $api = new DNSAPI($params);
 
-        /**
-         * Premium domain parameters.
-         *
-         * Premium domains enabled informs you if
-         * the admin user has enabled
-         * the selling of premium domain names.
-         * If this domain is a premium name,
-         * `premiumCost` will contain the cost price
-         * retrieved at the time of
-         * the order being placed.
-         * The premium order should
-         * only be processed
-         * if the cost price now
-         * matches the previously fetched amount.
-         */
-        $premiumDomainsEnabled = (bool)$params['premiumEnabled'];
-        $premiumDomainsCost = $params['premiumCost'];
-
-        // Transfer Domain
-        $domain = [
-            'name' => $domain,
-            'authinfo' => $eppCode,
-            'period' => $registrationPeriod
-        ];
-
-        // Add Premium Charge If Applicable
-        if ($premiumDomainsEnabled && $premiumDomainsCost) {
-            $domain['charge']['price'] = $premiumDomainsCost;
-        }
-
         try {
+            // Check if domain is already pending transfer
+            $domain_transfer_in = $api->list_domain_transfer_in($domain);
+
+            if (isset($domain_transfer_in[0]['wid'])) {
+                return ['success' => true];
+            }
+
+            /**
+             * Premium domain parameters.
+             *
+             * Premium domains enabled informs you if
+             * the admin user has enabled
+             * the selling of premium domain names.
+             * If this domain is a premium name,
+             * `premiumCost` will contain the cost price
+             * retrieved at the time of
+             * the order being placed.
+             * The premium order should
+             * only be processed
+             * if the cost price now
+             * matches the previously fetched amount.
+             */
+            $premiumDomainsEnabled = (bool)$params['premiumEnabled'];
+            $premiumDomainsCost = $params['premiumCost'];
+
+            // Transfer Domain
+            $domain_array = [
+                'name' => $domain,
+                'authinfo' => $eppCode,
+                'period' => $registrationPeriod
+            ];
+
+            // Add Premium Charge If Applicable
+            if ($premiumDomainsEnabled && $premiumDomainsCost) {
+                $domain_array['charge']['price'] = $premiumDomainsCost;
+            }
+
             //  Call The Register Domain Function
-            $api->transfer_domain($domain);
+            $api->transfer_domain($domain_array);
         } catch (\Exception $e) {
             return ['error' => $e->getMessage()];
         }
