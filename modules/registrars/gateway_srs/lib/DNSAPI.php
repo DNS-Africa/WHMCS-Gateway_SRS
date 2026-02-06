@@ -269,6 +269,7 @@
 
             $output = curl_exec($ch);
             $response_code = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+            $effective_url = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
 
             /** Add error to error log */
             if ($this->debug) {
@@ -284,7 +285,7 @@
             }
 
             syslog(LOG_DEBUG, "gateway_srs:". static::class . '::execCH >> ' .
-                curl_getinfo($ch, CURLINFO_EFFECTIVE_URL) . ' up:' .
+                $effective_url . ' up:' .
                 curl_getinfo($ch, CURLINFO_SIZE_UPLOAD) . ' down:' .
                 curl_getinfo($ch, CURLINFO_SIZE_DOWNLOAD) .
                 ' - ' . $response_code . ' : ' . $output);
@@ -304,13 +305,17 @@
                         $this->doLogin();
                         return $this->execCH($ch);
                     }
-                    throw new RestAPIException($output['detail'], $response_code, $output);
+                    $detail_message = $output['detail'];
+                    if ($detail_message == 'Object exists' && strpos($effective_url, 'registry/domains/') !== false) {
+                        $detail_message = 'Domain already exists or is registered under another reseller.';
+                    }
+                    throw new RestAPIException($detail_message, $response_code, $output);
                 }else{
                     if (is_array($output))
                         $output_string = json_encode($output);
                     else
                         $output_string = $output;
-                    throw new RestAPIException("Error from the API ".curl_getinfo($ch, CURLINFO_EFFECTIVE_URL)." $response_code: $output_string", $response_code,
+                    throw new RestAPIException("Error from the API ".$effective_url." $response_code: $output_string", $response_code,
                     $output);
                 }
             }
