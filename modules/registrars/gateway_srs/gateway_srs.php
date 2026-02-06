@@ -312,7 +312,7 @@
 
         } catch (\Exception $e) {
             return [
-                'error' => $e->getMessage() . " " . $e->getTraceAsString()
+                'error' => $e->getMessage()
             ];
         }
     }

@@ -306,10 +306,12 @@
                         return $this->execCH($ch);
                     }
                     $detail_message = $output['detail'];
+
+                    /** Rewrite error messages for clients */
                     if ($detail_message == 'Object exists' && strpos($effective_url, 'registry/domains/') !== false) {
-                        $detail_message = 'Domain already exists or is registered under another reseller.';
+                        $detail_message = 'Domain already exists.';
                     }
-                    throw new RestAPIException($detail_message, $response_code, $output);
+                    throw new RestAPIException($detail_message, $response_code);
                 }else{
                     if (is_array($output))
                         $output_string = json_encode($output);
