@@ -1,416 +1,220 @@
 <?php
-    /*
-     * @copyright Copyright (c) DNS Africa 2023
-     * @author  David Peall <david@dns.business>
-     *
-     */
-    namespace WHMCS\Module\Registrar\gateway_srs;
+namespace WHMCS\Module\Registrar\gateway_srs;
 
-    use PHPUnit\Logging\Exception;
-    use function PHPUnit\Framework\isJson;
-    use function PHPUnit\Framework\lessThanOrEqual;
+require_once __DIR__ . '/bootstrap.php';
 
-    class DNSAPI
+class DNSAPI
+{
+    protected string $username;
+    protected string $password;
+    protected string $epp_username = '';
+    protected string $registry_api_url;
+    protected string $portal_api_url;
+    protected string $mode;
+    protected string $authentication;
+    public bool $debug = false;
+    protected string $bearer = '';
+    private string $cacheKey;
+    private bool $authenticating = false;
+    private $transport;
+    private $operationLock;
+    private static array $tokens = [];
+    protected $lock_statusses = ['clientTransferProhibited', 'clientUpdateProhibited'];
+    protected const TOKEN_REFRESH_MARGIN_SECONDS = 120;
+
+    // The optional transport is a dependency-injection seam for offline API contract tests.
+    public function __construct(array $params, ?callable $transport = null)
     {
-        /**
-         * @var string
-         */
-        protected $username;
-        /**
-         * @var string
-         */
-        protected $password;
-        /**
-         * @var string
-         */
-        protected $epp_username;
-        /**
-         * @var string
-         */
-        protected $registry_api_url;
-        /**
-         * @var string
-         */
-        protected $portal_api_url;
-        /**
-         * @var string
-         */
-        protected $mode;
-        /**
-         * @var bool
-         */
-        public $debug=false;
-        /**
-         * @var bool
-         */
-        protected $curl_auth=true;
-        /**
-         * @var bool
-         */
-        protected $throw_http_error=true;
-        protected $curl_timeout=60;
-        /** Number of seconds before expiry at which a cached token is refreshed */
-        protected const TOKEN_REFRESH_MARGIN_SECONDS = 120;
-        /** Lifetime assumed for a token whose JWT exp claim cannot be parsed */
-        protected const TOKEN_FALLBACK_LIFETIME_SECONDS = 3600;
-        protected $curl_connect_timeout=20;
-        protected $curl_followlocation=1;
-        protected $curl_sslverifypeer=true;
-        protected $curl_sslverifyhost=true;
-        /**
-         * @var mixed[]
-         */
-        protected $curl_headers = array(
-            'Content-Type: application/json'
-        );
-        /**
-         * @var string
-         */
-        protected $bearer = '';
-        /**
-         * @var string[] the request headers last set on the current curl handle
-         */
-        protected $currentHeaders = array();
-        /**
-         * @var bool guards against re-auth recursion when the login call itself fails
-         */
-        protected $auth_retry_in_progress = false;
-        protected $lock_statusses = [
-            'clientTransferProhibited',
-            'clientUpdateProhibited',
-        ];
-
-        public function __construct(array $params)
-        {
-            $this->username = $params["Portal_Username"];
-            $this->password = $params["Portal_Password"];
-            $this->mode = $params["AccountMode"];
-
-            if ($this->mode == 'live')
-            {
-                $this->registry_api_url = "https://srs-epp.dns.net.za/api/";
-                $this->portal_api_url = "https://srs-epp.dns.net.za/portal/";
-            } else {
-                $this->registry_api_url = "https://gateway-otande.dns.net.za/api/";
-                $this->portal_api_url = "https://srs-epp.dns.net.za/portal/";
+        $this->username = trim($params['Portal_Username'] ?? '');
+        $this->password = $params['Portal_Password'] ?? '';
+        $this->mode = $params['AccountMode'] ?? 'live';
+        $this->authentication = $params['Authentication'] ?? 'password';
+        if (!in_array($this->mode, ['live', 'ote', 'dev'], true)
+            || !in_array($this->authentication, ['password', 'jwt'], true)) {
+            throw new RestAPIException('Choose a valid account mode and authentication method.');
+        }
+        $host = ['live' => 'https://api.gatewaysrs.com', 'ote' => 'https://api-ote.gatewaysrs.com', 'dev' => 'https://api-dev.gatewaysrs.com'][$this->mode];
+        $this->registry_api_url = $host . '/api/';
+        $this->portal_api_url = $host . '/portal/';
+        $this->transport = $transport;
+        $this->debug = !empty($params['debug']);
+        $state = new RuntimeState();
+        $this->operationLock = $state->lock('operations', false);
+        if (in_array($state->read('update')['phase'] ?? '', ['installing', 'recovering'], true)) {
+            throw new RestAPIException('A module update was interrupted. Recover it through Gateway SRS Manager before running registrar operations.');
+        }
+        if ($this->authentication === 'jwt') {
+            $this->bearer = trim($params['JWT_Token'] ?? '');
+            $expiry = self::jwtExpiry($this->bearer);
+            if ($expiry === null || $expiry <= time()) {
+                throw new RestAPIException('The portal-issued JWT is missing, malformed or expired. Replace it in the registrar settings.');
             }
+        } elseif ($this->username === '' || $this->password === '') {
+            throw new RestAPIException('Enter the portal username and password, or select JWT authentication.');
+        }
+        $this->cacheKey = hash('sha256', json_encode([$host, $this->authentication, $this->username,
+            $this->authentication === 'jwt' ? $this->bearer : $this->password]));
+        $this->doLogin();
+    }
 
-            if (key_exists("debug", $params))
-                $this->debug = (bool)$params["debug"];
+    public function __destruct()
+    {
+        if (is_resource($this->operationLock)) {
+            flock($this->operationLock, LOCK_UN);
+            fclose($this->operationLock);
+        }
+    }
 
+    /** Decode scheduling metadata only; the API authenticates the token and checks revocation. */
+    public static function jwtExpiry(string $jwt): ?int
+    {
+        $parts = explode('.', $jwt);
+        if (count($parts) !== 3 || in_array('', $parts, true)
+            || !preg_match('/^[A-Za-z0-9_-]+$/D', $parts[1])) {
+            return null;
+        }
+        $payload = base64_decode(strtr($parts[1], '-_', '+/') . str_repeat('=', (4 - strlen($parts[1]) % 4) % 4), true);
+        $claims = $payload === false ? null : json_decode($payload, true);
+        $expiry = is_array($claims) ? ($claims['exp'] ?? null) : null;
+        return is_int($expiry) && $expiry > 0 ? $expiry : null;
+    }
+
+    public function doLogin(): void
+    {
+        $cached = self::$tokens[$this->cacheKey] ?? null;
+        if ($cached && $cached['expires'] - time() > self::TOKEN_REFRESH_MARGIN_SECONDS) {
+            $this->bearer = $cached['bearer'];
+            $this->epp_username = $cached['epp_username'];
+            return;
+        }
+        $this->authenticating = true;
+        try {
+            if ($this->authentication === 'password') {
+                $this->bearer = '';
+                $login = $this->postCH($this->portal_api_url . 'auth-jwt/', [
+                    'username' => $this->username, 'password' => $this->password,
+                ]);
+                $this->bearer = $login['token'] ?? '';
+                if ($this->bearer === '') {
+                    throw new RestAPIException('The portal did not return an access token.');
+                }
+            }
+            $identity = $this->getCH($this->portal_api_url . 'auth-epp-username/');
+            if (empty($identity['epp_username']) || !is_string($identity['epp_username'])) {
+                throw new RestAPIException('These credentials are not linked to an active Gateway SRS registrar.');
+            }
+            $this->epp_username = $identity['epp_username'];
+            self::$tokens[$this->cacheKey] = ['bearer' => $this->bearer, 'epp_username' => $this->epp_username,
+                'expires' => self::jwtExpiry($this->bearer) ?? time() + 300];
+        } finally {
+            $this->authenticating = false;
+        }
+    }
+
+    public function validateConnection(): void
+    {
+        // Check the capabilities used by this module without purchases or expensive full-list reads.
+        $this->getCH($this->registry_api_url . 'registry/domains/?limit=1');
+        $this->getCH($this->portal_api_url . 'billing/pricelist-current/?limit=1');
+    }
+
+    protected function getCH($url): array { return $this->request('GET', $url); }
+    protected function postCH($url, $data): array { return $this->request('POST', $url, $data); }
+    protected function putCH($url, $data): array { return $this->request('PUT', $url, $data); }
+    protected function patchCH($url, $data): array { return $this->request('PATCH', $url, $data); }
+    protected function delCH($url): array { return $this->request('DELETE', $url); }
+
+    private function request(string $method, string $url, ?array $data = null, bool $retried = false): array
+    {
+        if (strpos($url, $this->registry_api_url) !== 0 && strpos($url, $this->portal_api_url) !== 0) {
+            throw new RestAPIException('Refusing an API request outside the selected Gateway SRS environment.');
+        }
+        $response = $this->send($method, $url, $data);
+        $status = (int) $response['status'];
+        if ($this->debug || $status >= 400) {
+            SafeLog::write('API request', ['method' => $method, 'status' => $status, 'retry' => $retried]);
+        }
+        $body = $response['body'];
+        if ($status === 401 && !$this->authenticating && !$retried && $this->authentication === 'password') {
+            unset(self::$tokens[$this->cacheKey]);
             $this->doLogin();
+            return $this->request($method, $url, $data, true);
         }
-
-        /**
-         * Decode the `exp` claim (unix timestamp) from a JWT, unverified.
-         * @return int|null null when the token cannot be parsed.
-         */
-        static public function jwtExpiry(string $jwt): ?int
-        {
-            $parts = explode('.', $jwt);
-            if (count($parts) !== 3) {
-                return null;
+        if ($status < 200 || $status >= 300) {
+            $output = is_array($body) ? $body : json_decode($body, true);
+            $output = is_array($output) ? $output : [];
+            if ($status === 401 && $this->authentication === 'jwt') {
+                throw new RestAPIException('Gateway SRS rejected the JWT. It may be expired or revoked; replace it in the registrar settings.', 401);
             }
-            $segment = $parts[1];
-            $padded = $segment . str_repeat('=', (4 - strlen($segment) % 4) % 4);
-            $payload = base64_decode(strtr($padded, '-_', '+/'), true);
-            if ($payload === false) {
-                return null;
+            if (($output['error'] ?? '') === '2FA_REQ') {
+                throw new RestAPIException('This account requires two-factor authentication. Use a portal-issued API-user JWT for unattended registrar operations.', 401);
             }
-            $claims = json_decode($payload, true);
-            if (!is_array($claims) || !isset($claims['exp']) || !is_numeric($claims['exp'])) {
-                return null;
+            $detail = $output['detail'] ?? '';
+            // Do not return arbitrary bodies, field values, credentials or upstream HTML to clients.
+            $known = ['Object exists' => 'Domain already exists.', 'Not found.' => 'Not found.',
+                'Signature has expired.' => 'The API access token has expired.',
+                'No active account found with the given credentials' => 'Unable to log in with provided credentials.'];
+            $message = is_string($detail) ? ($known[$detail] ?? '') : '';
+            if ($message === '') {
+                $message = 'Gateway SRS API request failed (HTTP ' . $status . '). Check the account permissions and request settings.';
             }
-            return (int)$claims['exp'];
+            throw new RestAPIException($message, $status, $output);
         }
-
-        function doLogin()
-        {
-            if (session_status() === PHP_SESSION_NONE) {
-                session_start();
-            }
-            if(isset($_SESSION['appbearer']) and isset($_SESSION['epp_username'])) {
-                $token_valid = false;
-                if (isset($_SESSION['apitokenexp']) and is_int($_SESSION['apitokenexp'])) {
-                    $token_valid = $_SESSION['apitokenexp'] - time() > self::TOKEN_REFRESH_MARGIN_SECONDS;
-                } elseif (isset($_SESSION['apitokenissued']) and is_int($_SESSION['apitokenissued'])) {
-                    # no parseable exp: fall back to an assumed token lifetime
-                    $token_valid = time() - $_SESSION['apitokenissued'] < self::TOKEN_FALLBACK_LIFETIME_SECONDS;
-                }
-                if ($token_valid) {
-                    $this->bearer = $_SESSION['appbearer'];
-                    $this->epp_username = $_SESSION['epp_username'];
-                    return;
-                }
-            }
-
-            $login_details = array("username" => $this->username, "password" => $this->password);
-            $login = $this->postCH($this->portal_api_url."auth-jwt/", $login_details);
-            $this->bearer = $login['token'];
-            $this->epp_username = $this->getCH($this->portal_api_url."auth-epp-username/")["epp_username"];
-            $_SESSION['apitokenexp'] = self::jwtExpiry($this->bearer);
-            $_SESSION['apitokenissued'] = time();
-            $_SESSION['appbearer']=$this->bearer;
-            $_SESSION['epp_username']=$this->epp_username;
-
-            syslog(LOG_DEBUG, "New API bearer token expires: " . ($_SESSION['apitokenexp'] ?? 'unknown') );
+        if ($status === 204 || $body === '') {
+            return ['http_code' => $status];
         }
-
-        /**
-         * Prepare the basic curl object for the API call
-         * @param string $url
-         * @return resource
-         */
-        private function initCH(string $url)
-        {
-            $ch = curl_init();
-
-            $authorization = "Authorization: Bearer " . $this->bearer; // Prepare the authorisation token
-            $this->currentHeaders = array_merge($this->curl_headers, array($authorization));
-            curl_setopt($ch, CURLOPT_HTTPHEADER, $this->currentHeaders);
-            curl_setopt($ch, CURLOPT_URL, $url);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, $this->curl_sslverifypeer);
-            curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, $this->curl_sslverifyhost);
-            curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, $this->curl_connect_timeout);
-            curl_setopt($ch, CURLOPT_TIMEOUT, $this->curl_timeout);
-            curl_setopt($ch, CURLOPT_FOLLOWLOCATION, $this->curl_followlocation);
-            curl_setopt($ch, CURLOPT_XOAUTH2_BEARER, $this->bearer);
-            curl_setopt($ch, CURLINFO_HEADER_OUT, true);
-
-            return $ch;
+        $decoded = is_array($body) ? $body : json_decode($body, true);
+        if (!is_array($decoded)) {
+            throw new RestAPIException('Gateway SRS returned an invalid JSON response.', $status);
         }
+        $decoded['http_code'] = $status;
+        return $decoded;
+    }
 
-
-        /**
-         * Generic function to use a curl http DEL command on the RestAPI
-         * @param string $url - additional url information for the API call
-         * @return array dictionary of key value pairs containing the curl output and http_code
-         * @throws RestAPIException
-         */
-        protected function delCH($url): array
-        {
-            $ch = $this->initCH($url);
-            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'DELETE');
-            $output = $this->execCH($ch);
-
-            return $output;
+    protected function send(string $method, string $url, ?array $data): array
+    {
+        if ($this->transport !== null) {
+            return ($this->transport)($method, $url, $data, $this->bearer);
         }
-
-        /**
-         * Generic function to use a curl http GET command on the RestAPI
-         * @param string $url - additional url information for the API call
-         * @return array dictionary of key value pairs containing the curl output and http_code
-         * @throws RestAPIException
-         */
-        protected function getCH($url): array
-        {
-
-            $ch = $this->initCH($url);
-            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'GET');
-
-            $return = $this->execCH($ch);
-            if ($this->debug) {
-            //    logModuleCall('gateway_srs',"getdata",$url,$return);
+        $ch = curl_init($url);
+        try {
+            curl_setopt_array($ch, [CURLOPT_CUSTOMREQUEST => $method, CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2, CURLOPT_FOLLOWLOCATION => false,
+                CURLOPT_CONNECTTIMEOUT => 20, CURLOPT_TIMEOUT => 60,
+                CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Accept: application/json', 'Authorization: Bearer ' . $this->bearer]]);
+            if ($data !== null) {
+                curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data, JSON_THROW_ON_ERROR));
             }
-            return $return;
+            $body = curl_exec($ch);
+            if ($body === false) {
+                SafeLog::write('API transport failure', ['event' => 'transport_error']);
+                throw new RestAPIException('Cannot connect to Gateway SRS. Check connectivity and retry; verify the domain state before repeating a purchase.');
+            }
+            return ['status' => curl_getinfo($ch, CURLINFO_RESPONSE_CODE), 'body' => $body];
+        } finally {
+            unset($ch);
         }
+    }
 
-        /**
-         * Generic function to use a curl http PUT command on the RestAPI
-         * @param string $url additional url information for the API call
-         * @param array $post_data dictionary of key/values to be posted
-         * @return array dictionary of key value pairs containing the curl output and http_code
-         * @throws RestAPIException
-         */
-        protected function putCH($url, $post_data): array
-        {
-            
-            $data_json = json_encode($post_data);
-            $authorization = "Authorization: Bearer " . $this->bearer; // Prepare the authorisation token
-            $curl_headers = array(
-                'Content-Type: application/json',
-                'Content-Length: ' . strlen($data_json),
-                $authorization
-            );
-
-            $ch = $this->initCH($url);
-            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'PUT');
-            $this->currentHeaders = $curl_headers;
-            curl_setopt($ch, CURLOPT_HTTPHEADER, $curl_headers);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, $data_json);
-
-            $return = $this->execCH($ch);
-
-            if($this->debug) 
-            {
-               // logModuleCall('gateway_srs',"putCH",$post_data,$return);
+    protected function _fetch_all(string $url, int $limit = 100): array
+    {
+        $items = [];
+        $offset = 0;
+        do {
+            $page = $this->getCH($url . (strpos($url, '?') === false ? '?' : '&') . http_build_query(['limit' => $limit, 'offset' => $offset]));
+            if (!isset($page['results']) || !is_array($page['results'])) {
+                throw new RestAPIException('Gateway SRS returned an invalid list response.');
             }
-            return $return;
-        }
-
-        /**
-         * Generic function to use a curl http POST command on the RestAPI
-         * @param string $url additional url information for the API call
-         * @param array $post_data dictionary of key/values to be posted
-         * @return array dictionary of key value pairs containing the curl output and http_code
-         * @throws RestAPIException
-         */
-        protected function postCH($url, $post_data): array
-        {
-            $authorization = "Authorization: Bearer " . $this->bearer; // Prepare the authorisation token
-            $ch = $this->initCH($url);
-
-            if(!empty($post_data))
-            {
-                $data_json = json_encode($post_data);
-                $curl_headers = array(
-                    'Content-Type: application/json',
-                    'Content-Length: ' . strlen($data_json),
-                    $authorization
-                );
-
-                curl_setopt($ch, CURLOPT_POSTFIELDS, $data_json);
+            $batch = $page['results'];
+            $items = array_merge($items, $batch);
+            $offset += count($batch);
+            $count = (int) ($page['count'] ?? $offset);
+            if (!$batch && $offset < $count) {
+                throw new RestAPIException('Gateway SRS returned an incomplete paginated response.');
             }
-            else
-            {
-                $curl_headers = array(
-                    'Content-Type: application/json',
-                    $authorization
-                );
-            }
-            
-            $this->currentHeaders = $curl_headers;
-            curl_setopt($ch, CURLOPT_HTTPHEADER, $curl_headers);
-            curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'POST');
-
-            $return = $this->execCH($ch);
-            if ($this->debug) {
-                //logModuleCall('gateway_srs',"postCH".$url,$post_data,$return);
-            }
-            return $return;
-        }
-
-        /**
-         * This function executes the curl request
-         *
-         * @param $ch : Curl object
-         * @return string|array
-         * @throws RestAPIException
-         */
-        private function execCH($ch, bool $auth_retry = false)
-        {
-            $verbose = NULL;
-            if ($this->debug) {
-                curl_setopt($ch, CURLOPT_VERBOSE, true);
-                curl_setopt($ch, CURLOPT_STDERR, $verbose = fopen('php://temp', 'rw+'));
-            }
-
-            $output = curl_exec($ch);
-            $response_code = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
-            $effective_url = curl_getinfo($ch, CURLINFO_EFFECTIVE_URL);
-
-            /** Add error to error log */
-            if ($this->debug) {
-                logModuleCall('gateway_srs',"execCH1", static::class . '::execCH >> ' .
-                    curl_getinfo($ch, CURLINFO_EFFECTIVE_URL) . ' up:' .
-                    curl_getinfo($ch, CURLINFO_SIZE_UPLOAD) . ' down:' .
-                    curl_getinfo($ch, CURLINFO_SIZE_DOWNLOAD) .
-                    ' - ' . $response_code, $output);
-            }
-
-            if ($this->debug) {
-                logModuleCall('gateway_srs',"execCH2", static::class . '::execCH >> ' . $output . " Headers:" . curl_getinfo($ch, CURLINFO_HEADER_OUT ), $output);
-            }
-
-            syslog(LOG_DEBUG, "gateway_srs:". static::class . '::execCH >> ' .
-                $effective_url . ' up:' .
-                curl_getinfo($ch, CURLINFO_SIZE_UPLOAD) . ' down:' .
-                curl_getinfo($ch, CURLINFO_SIZE_DOWNLOAD) .
-                ' - ' . $response_code . ' : ' . $output);
-
-            $output = json_decode($output, true);
-
-            /** if the API is set to throw http errors then check for non 2xx response */
-            if ($this->throw_http_error && ($response_code < 200 || $response_code >= 300)){
-
-                /** If detail for error exists, add message to error */
-                if(isset($output['detail'])){
-                    # Re-authenticate once and retry if we got a 401 / expired token
-                    if (!$auth_retry && !$this->auth_retry_in_progress && ($response_code === 401 || $output['detail'] == 'Signature has expired.')){
-                        $this->auth_retry_in_progress = true;
-                        try {
-                            unset($_SESSION['apitokentime'], $_SESSION['appbearer'], $_SESSION['epp_username'], $_SESSION['apitokenexp'], $_SESSION['apitokenissued']);
-                            $this->doLogin();
-                            # Re-arm the handle with the new bearer before retrying
-                            $rebuilt = array();
-                            foreach ($this->currentHeaders as $header) {
-                                if (stripos($header, 'Authorization:') === 0) {
-                                    continue;
-                                }
-                                $rebuilt[] = $header;
-                            }
-                            $rebuilt[] = 'Authorization: Bearer ' . $this->bearer;
-                            $this->currentHeaders = $rebuilt;
-                            curl_setopt($ch, CURLOPT_HTTPHEADER, $this->currentHeaders);
-                            curl_setopt($ch, CURLOPT_XOAUTH2_BEARER, $this->bearer);
-                        } finally {
-                            $this->auth_retry_in_progress = false;
-                        }
-                        return $this->execCH($ch, true);
-                    }
-                    $detail_message = $output['detail'];
-
-                    /** Rewrite error messages for clients */
-                    if ($detail_message == 'Object exists' && strpos($effective_url, 'registry/domains/') !== false) {
-                        $detail_message = 'Domain already exists.';
-                    }
-                    throw new RestAPIException($detail_message, $response_code);
-                }else{
-                    if (is_array($output))
-                        $output_string = json_encode($output);
-                    else
-                        $output_string = $output;
-                    throw new RestAPIException("Error from the API ".$effective_url." $response_code: $output_string", $response_code,
-                    $output);
-                }
-            }
-
-            $output['http_code'] = $response_code;
-
-            curl_close($ch);
-            return $output;
-        }
-
-        /**
-         * @param string $url
-         * @param int $limit
-         * @return mixed
-         * @throws RestAPIException
-         */
-        protected function _fetch_all(string $url, int $limit = 100)
-        {
-            /** Set the limit on the number of entries to get in one request the max is typically 100 */
-            $url .= '&limit=' . $limit;
-
-            $output = $this->getCH($url);
-
-            $count = intval($output['count']);
-
-            /** If there is more than $limit entries we need to fetch them in batches of $limit */
-            if ($count > $limit) {
-                $offset = 0;
-                while ($count > $offset) {
-                    $offset += $limit;
-                    $loop_url = $url . '&offset=' . $offset;
-                    $more = $this->getCH($loop_url);
-
-                    /** add the array to the collection for return */
-                    $output['results'] = array_merge($output['results'], $more['results']);
-                }
-            }
-            return $output['results'];
-        }
+        } while ($offset < $count);
+        return $items;
+    }
 
         static private function endsWith(string $needle, string $haystack): bool
         {
@@ -510,8 +314,9 @@
         public function update_contact($contact_info, $existing_id)
         {
             // Check For Existing Contact
-            $url = $this->registry_api_url . 'registry/contacts/' . $existing_id . '/';
-            $result = $this->putCH($url, $contact_info);
+            $url = $this->registry_api_url . 'registry/contacts/' . rawurlencode($existing_id) . '/';
+            $contact_info['id'] = $existing_id;
+            $result = $this->patchCH($url, $contact_info);
             return true;
         }
 
@@ -521,8 +326,7 @@
         public function contact_listing()
         {
             $url = $this->registry_api_url . 'registry/contacts/';
-            $result = $this->getCH($url);
-            return $result['wid'];
+            return $this->_fetch_all($url);
         }
 
         /*
@@ -540,8 +344,7 @@
          */
         public function contact_info($contact_id): array
         {
-            $wid = $this->get_contact_wid($contact_id);
-            $url = $this->registry_api_url . 'registry/contacts/' . $wid;
+            $url = $this->registry_api_url . 'registry/contacts/' . rawurlencode($contact_id) . '/';
             return $this->getCH($url);
         }
 
@@ -551,7 +354,7 @@
 
         public function contact_check($check, $contact_name = '')
         {
-            $url = $this->registry_api_url . 'registry/contacts/check/' . $contact_name;
+            $url = $this->registry_api_url . 'registry/contacts/check/';
             $result = $this->postCH($url, $check);
             return $result['results'];
         }
@@ -578,7 +381,7 @@
         {
             $url = $this->registry_api_url.
                     'registry/domains/'.
-                    ($domain_name!='' ? '?name=' . $domain_name : '');
+                    ($domain_name!='' ? '?name=' . rawurlencode($domain_name) : '');
 
             $result = $this->getCH($url);
             return $result['results'];
@@ -593,7 +396,7 @@
         {
             $url = $this->registry_api_url.
                 'registry/transfersin/'.
-                ($domain_name!='' ? '?name=' . $domain_name : '');
+                ($domain_name!='' ? '?name=' . rawurlencode($domain_name) : '');
 
             $result = $this->getCH($url);
             return $result['results'];
@@ -608,7 +411,7 @@
         {
             $url = $this->registry_api_url.
                 'registry/transfersout/'.
-                ($domain_name!='' ? '?name=' . $domain_name : '');
+                ($domain_name!='' ? '?name=' . rawurlencode($domain_name) : '');
 
             $result = $this->getCH($url);
             return $result['results'];
@@ -618,9 +421,9 @@
          * Get's Domain's info
          */
 
-        public function view_domain($domain_wid)
+        public function view_domain($domain_name)
         {
-            $url = $this->registry_api_url . 'registry/domains/' . $domain_wid;
+            $url = $this->registry_api_url . 'registry/domains/' . rawurlencode($domain_name) . '/';
             $result = $this->getCH($url);
             return $result;
         }
@@ -631,8 +434,12 @@
 
         public function update_domain($domain_info, $domain_id = '')
         {
-            $url = $this->registry_api_url . 'registry/domains/' . $domain_id.'/';
-            $result = $this->putCH($url, $domain_info);
+            $name = $domain_info['name'] ?? $domain_id;
+            if (!is_string($name) || strpos($name, '.') === false) {
+                throw new RestAPIException('A domain name is required for this operation.');
+            }
+            $url = $this->registry_api_url . 'registry/domains/' . rawurlencode($name) . '/';
+            $result = $this->patchCH($url, $domain_info);
             return $result['wid'];
         }
 
@@ -645,7 +452,7 @@
          */
         public function delete_domain($domain_id)
         {
-            $url = $this->registry_api_url . 'registry/domains/' . $domain_id;
+            $url = $this->registry_api_url . 'registry/domains/' . rawurlencode($domain_id) . '/';
             $result = $this->delCH($url);
             if ($result["http_code"] >= 200 and $result["http_code"]  < 300)
                 return true;
@@ -670,14 +477,14 @@
          *                  'period' => number of years,
          *                  'period_unit' => 'y', for years
          *
-         * @return int
+         * @return array
          * @throws RestAPIException
          */
-        public function renew_domain($domain): int
+        public function renew_domain($domain): array
         {
-            $url = $this->registry_api_url . 'registry/WHMCS/domains/' . $domain["name"] . '/renew/';
+            $url = $this->registry_api_url . 'registry/WHMCS/domains/' . rawurlencode($domain['name']) . '/renew/';
             $result = $this->postCH($url, $domain);
-            return (int)$result['wid'];
+            return $result;
         }
 
         /*
@@ -688,7 +495,7 @@
         {
             $url = $this->registry_api_url . 'registry/domains/transfer-request/';
             $result = $this->postCH($url, $domain);
-            return $result['name'];
+            return $result;
         }
 
         /*
@@ -706,30 +513,16 @@
          * Reject Domain Transfer
          */
 
-        public function reject_transfer_domain($domain)
+        public function reject_transfer_domain($domain, $unused = null)
         {
-            $url = $this->registry_api_url.
-                    'registry/domains/'.
-                    $domain.
-                    '/transfer-reject/';
-
-            $result = $this->postCH($url, $domain);
-            return true;
+            $name = is_array($domain) ? $domain['name'] : $domain;
+            return $this->postCH($this->registry_api_url . 'registry/domains/' . rawurlencode($name) . '/transfer-reject/', []);
         }
 
-        /*
-         * Approve Domain Transfer
-         */
-
-        public function approve_transfer_domain($domain, $domain_id)
+        public function approve_transfer_domain($domain, $unused = null)
         {
-            $url = $this->registry_api_url.
-                    'registry/domains/'.
-                    $domain_id .
-                    '/transfer-approve/';
-
-            $result = $this->postCH($url, $domain);
-            return true;
+            $name = is_array($domain) ? $domain['name'] : $domain;
+            return $this->postCH($this->registry_api_url . 'registry/domains/' . rawurlencode($name) . '/transfer-approve/', []);
         }
 
         /**
@@ -743,11 +536,17 @@
             $url = $this->registry_api_url . 'registry/domains/info/';
             $result = $this->postCH($url, array("name" => $domain));
 
-            if ($this->epp_username != $result['results']['rar']) {
-                throw new RestAPIException('Domain owned by: ' . $result['results']['rar'], null);
+            $info = $result['results'] ?? [];
+            if (isset($info[0])) {
+                $info = $info[0];
             }
-
-            return $result['results'];
+            if (!is_array($info) || !$info) {
+                throw new RestAPIException('Gateway SRS returned no domain information.');
+            }
+            if (isset($info['rar']) && $this->epp_username !== $info['rar']) {
+                throw new RestAPIException('This domain is managed by another registrar.');
+            }
+            return $info;
         }
 
         /*
@@ -756,7 +555,7 @@
 
         public function domain_sync($domain)
         {
-            $url = $this->registry_api_url . "registry/WHMCS/domains/$domain/";
+            $url = $this->registry_api_url . "registry/WHMCS/domains/" . rawurlencode($domain) . "/";
 
             return $this->getCH($url);
         }
@@ -774,7 +573,7 @@
          */
         public function get_domain_wid($domain_name): int
         {
-            $url = $this->registry_api_url . "registry/WHMCS/domains/$domain_name/wid/";
+            $url = $this->registry_api_url . "registry/WHMCS/domains/" . rawurlencode($domain_name) . "/wid/";
             $result = $this->getCH($url);
 
             return $result["wid"];
@@ -785,14 +584,14 @@
          */
         public function get_domain_nameservers($domain_name): array
         {
-            $url = $this->registry_api_url . "registry/WHMCS/domains/$domain_name/nameservers/";
+            $url = $this->registry_api_url . "registry/WHMCS/domains/" . rawurlencode($domain_name) . "/nameservers/";
 
             return $this->getCH($url);
         }
 
         public function get_domain_contacts($domain_name): array
         {
-            $url = $this->registry_api_url . "registry/WHMCS/domains/$domain_name/contacts/";
+            $url = $this->registry_api_url . "registry/WHMCS/domains/" . rawurlencode($domain_name) . "/contacts/";
 
             return $this->getCH($url);
         }
@@ -819,7 +618,7 @@
                 'authinfo'   => $this->generate_password($domain)
             ];
 
-            $domain_info = $this->domain_info($domain_arr);
+            $domain_info = $this->domain_info($domain);
             $locked = false;
             foreach ($domain_info['statuses'] as $status) {
                 if (in_array($status['code'], $this->lock_statusses)) {
@@ -843,81 +642,25 @@
          * List Hosts
          */
 
-        public function list_hosts($hostname = '')
-        {
-            $url = $this->registry_api_url.
-                    'registry/hosts/'.
-                    ($hostname!='' ? '?hostname=' . $hostname : '');
+        // Current APIs manage glue within a domain's hosts array, not standalone host resources.
+        public function list_hosts($hostname = '') { throw new RestAPIException('Manage nameserver glue through its domain.'); }
+        public function create_host($hostname, $ip, $ip_class = 'v4') { throw new RestAPIException('Manage nameserver glue through its domain.'); }
+        public function update_host($wid, $hostname, $ip, $ip_class = 'v4') { throw new RestAPIException('Manage nameserver glue through its domain.'); }
+        public function delete_host($wid) { throw new RestAPIException('Manage nameserver glue through its domain.'); }
 
-            $result = $this->getCH($url);
+        public function tld_pricing(): array
+        {
+            $result = $this->getCH($this->portal_api_url . 'billing/pricelist-current/?fetch_all=true');
+            if (!isset($result['results']) || !is_array($result['results'])
+                || (isset($result['count']) && (int) $result['count'] !== count($result['results']))) {
+                throw new RestAPIException('Gateway SRS returned an incomplete price list. No prices were imported.');
+            }
             return $result['results'];
-        }
-
-        /*
-         * Create Host
-         */
-
-        public function create_host($hostname, $ip, $ip_class = 'v4')
-        {
-            $url = $this->registry_api_url . 'registry/hosts/';
-
-            $host_record = [
-                'hostname'  => $hostname,
-                'glue'      => [
-                    [
-                        'ip'            => $ip,
-                        'class_field'   => $ip_class
-                    ]
-                ]
-            ];
-
-            $result = $this->postCH($url, $host_record);
-            return $result['wid'];
-        }
-
-        /*
-         * Update Host
-         */
-
-        public function update_host($wid, $hostname, $ip, $ip_class = 'v4')
-        {
-            $url = $this->registry_api_url . 'registry/hosts/' . $wid;
-
-            $host_record = [
-                'hostname'  => $hostname,
-                'glue'      => [
-                    [
-                        'ip'            => $ip,
-                        'class_field'   => $ip_class
-                    ]
-                ]
-            ];
-
-            $result = $this->putCH($url, $host_record);
-            return true;
-        }
-
-        /*
-         * Delete Host
-         */
-
-        public function delete_host($wid)
-        {
-            $url = $this->registry_api_url . 'registry/hosts/' . $wid;
-            $result = $this->delCH($url);
-            return true;
-        }
-
-        public function tld_pricing()
-        {
-            $url = $this->portal_api_url . 'billing/pricelist/?';
-            $result = $this->_fetch_all($url);
-            return $result;
         }
 
         public function suspend($domain)
         {
-            $url = $this->registry_api_url . 'registry/WHMCS/domains/'.$domain.'/suspend/';
+            $url = $this->registry_api_url . 'registry/WHMCS/domains/' . rawurlencode($domain) . '/suspend/';
             $result = $this->postCH($url,array());
 
             if($result['http_code']==200)
@@ -928,7 +671,7 @@
 
         public function unsuspend($domain)
         {
-            $url = $this->registry_api_url . 'registry/WHMCS/domains/'.$domain.'/unsuspend/';
+            $url = $this->registry_api_url . 'registry/WHMCS/domains/' . rawurlencode($domain) . '/unsuspend/';
             $result = $this->postCH($url,array());
             
             if($result['http_code']==200)
@@ -939,7 +682,7 @@
 
         public function lock($domain)
         {
-            $url = $this->registry_api_url . 'registry/WHMCS/domains/'.$domain.'/lock/';
+            $url = $this->registry_api_url . 'registry/WHMCS/domains/' . rawurlencode($domain) . '/lock/';
             $result = $this->postCH($url,array());
 
             if($result['http_code']==200)
@@ -950,7 +693,7 @@
 
         public function unlock($domain)
         {
-            $url = $this->registry_api_url . 'registry/WHMCS/domains/'.$domain.'/unlock/';
+            $url = $this->registry_api_url . 'registry/WHMCS/domains/' . rawurlencode($domain) . '/unlock/';
             $result = $this->postCH($url,array());
 
             if($result['http_code']==200)
@@ -961,7 +704,7 @@
 
         public function block($domain)
         {
-            $url = $this->registry_api_url . 'registry/WHMCS/domains/'.$domain.'/block/';
+            $url = $this->registry_api_url . 'registry/WHMCS/domains/' . rawurlencode($domain) . '/block/';
             $result = $this->postCH($url,array());
 
             if($result['http_code']==200)
@@ -972,7 +715,7 @@
 
         public function unblock($domain)
         {
-            $url = $this->registry_api_url . 'registry/WHMCS/domains/'.$domain.'/unblock/';
+            $url = $this->registry_api_url . 'registry/WHMCS/domains/' . rawurlencode($domain) . '/unblock/';
             $result = $this->postCH($url,array());
 
             if($result['http_code']==200)

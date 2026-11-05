@@ -14,20 +14,20 @@
          */
         protected $api_output;
 
-        public function __construct($message, $code, array $output = null, Throwable $previous = null)
+        public function __construct($message, $code = 0, ?array $output = null, ?Throwable $previous = null)
         {
             /** @var output set from constructor values*/
             $this->api_output = $output;
 
             /** call the parent constructor */
-            parent::__construct($message, $code, $previous);
+            parent::__construct($message, (int) $code, $previous);
         }
 
         /**
          * Return the contents of the api output
          * @return array|null
          */
-        public function get_api_output(): array
+        public function get_api_output(): ?array
         {
             return $this->api_output;
         }

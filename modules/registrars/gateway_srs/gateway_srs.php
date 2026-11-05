@@ -21,6 +21,12 @@
         die('This file cannot be accessed directly');
     }
 
+    require_once __DIR__ . '/lib/bootstrap.php';
+
+    use \WHMCS\Module\Registrar\gateway_srs\Module;
+    use \WHMCS\Module\Registrar\gateway_srs\RuntimeState;
+    use \WHMCS\Module\Registrar\gateway_srs\RestAPIException;
+
     use \WHMCS\Domains\DomainLookup\ResultsList;
     use \WHMCS\Domains\DomainLookup\SearchResult;
     use \WHMCS\Exception\Module\InvalidConfiguration;
@@ -45,7 +51,7 @@
     {
         $meta = json_decode(file_get_contents(__DIR__ . DIRECTORY_SEPARATOR . "whmcs.json"), true);
         return [
-            'DisplayName' => $meta["description"]["name"],
+            'DisplayName' => 'Gateway SRS ' . Module::version()['version'],
             'APIVersion' => '1.1',
         ];
     }
@@ -72,11 +78,23 @@
         return [
             'FriendlyName' => [
                 'Type' => 'System',
-                'Value' => $meta['description']['name']
+                'Value' => 'Gateway SRS ' . Module::version()['version']
             ],
             'Description' => [
                 'Type' => 'System',
                 'Value' => $meta['description']['tagline']
+            ],
+            'Authentication' => [
+                'FriendlyName' => 'Authentication', 'Type' => 'dropdown',
+                'Options' => ['password' => 'Portal username and password', 'jwt' => 'Portal-issued JWT'],
+                'Default' => 'password', 'Description' => 'Existing installations continue to use portal credentials.'
+            ],
+            'JWT_Token' => [
+                'FriendlyName' => 'Portal-issued JWT', 'Type' => 'password', 'Size' => '60', 'Default' => '',
+                'Description' => 'Paste the API-user access token from the portal. Expiry warnings start at 30 days and become urgent at 7 days.'
+            ],
+            'Module_Status' => [
+                'Type' => 'System', 'Value' => '<a href="addonmodules.php?module=gateway_srs_manager">Module status and updates</a> (activate Gateway SRS Manager under Addon Modules).'
             ],
             'Portal_Username' => [
                 'FriendlyName' => 'Portal Username',
@@ -99,14 +117,15 @@
                 'Size' => '25',
                 'Options' => [
                     'live' => 'Live',
-                    'ote' => 'Testing (OTE Account)'
+                    'ote' => 'Testing (OTE Account)',
+                    'dev' => 'Development (DEV Account)'
                 ],
                 'Description' => 'Choose one',
             ],
             'debug' => [
                 'FriendlyName' => 'Debug',
                 'Type' => 'yesno',
-                'Description' => 'Tick to enable',
+                'Description' => 'Log HTTP metadata only. Credentials and API bodies are never logged.',
             ],
         ];
     }
@@ -116,19 +135,24 @@
      */
     function gateway_srs_config_validate($params)
     {
-        //throw new InvalidConfiguration("to alert the UI if not correct.");
         try {
-            new DNSAPI($params);
-        } catch (Exception $e) {
+            Module::api($params)->validateConnection();
+        } catch (\Throwable $e) {
             throw new InvalidConfiguration($e->getMessage());
         }
-        // Update the previous registrar name to the new module name
-        $pdo = WHMCS\Database\Capsule::connection()->getPdo();
-        $query = $pdo->prepare("UPDATE tbldomains SET registrar = 'gateway_srs' WHERE registrar like '%ns_gateway'");
-        $query->execute();
-        $query = $pdo->prepare("UPDATE tbldomainpricing SET autoreg = 'gateway_srs' WHERE autoreg like '%ns_gateway'");
-        $query->execute();
-        return NULL;
+        // Keep the old name migration idempotent and restricted to known legacy names.
+        $state = new RuntimeState();
+        $lock = $state->lock('legacy-migration');
+        try {
+            if (empty($state->read('legacy-migration')['complete'])) {
+                Capsule::connection()->transaction(static function () {
+                    Capsule::table('tbldomains')->whereIn('registrar', ['dns_gateway', 'ns_gateway'])->update(['registrar' => 'gateway_srs']);
+                    Capsule::table('tbldomainpricing')->whereIn('autoreg', ['dns_gateway', 'ns_gateway'])->update(['autoreg' => 'gateway_srs']);
+                });
+                $state->write('legacy-migration', ['complete' => true]);
+            }
+        } finally { flock($lock, LOCK_UN); fclose($lock); }
+        return null;
     }
 
 
@@ -144,7 +168,7 @@
         try {
             // Registration parameters
             $sld = $params['sld'];
-            $tld = $params['tld'];
+            $tld = ltrim($params['tld'], '.');
             $domain = $sld . '.' . $tld;
             $registrationPeriod = $params['regperiod'];
 
@@ -159,7 +183,7 @@
             }
 
             // Connect To API
-            $api = new DNSAPI($params);
+            $api = Module::api($params);
 
             // Registrant information
             $registrant_info = [
@@ -253,8 +277,8 @@
              * if the cost price now matches the
              * previously fetched amount.
              */
-            $premiumDomainsEnabled = (bool)$params['premiumEnabled'];
-            $premiumDomainsCost = $params['premiumCost'];
+            $premiumDomainsEnabled = !empty($params['premiumEnabled']);
+            $premiumDomainsCost = $params['premiumCost'] ?? null;
 
             // Create Contacts
             $registrant_contact = $api->setcontact($registrant_info);
@@ -330,7 +354,7 @@
     {
         // Registration parameters
         $sld = $params['sld'];
-        $tld = $params['tld'];
+        $tld = ltrim($params['tld'], '.');
         $domain = $sld . '.' . $tld;
         $registrationPeriod = $params['regperiod'];
         $eppCode = htmlspecialchars_decode($params['eppcode']);
@@ -339,9 +363,8 @@
         }
 
         // Connect To API
-        $api = new DNSAPI($params);
-
         try {
+            $api = Module::api($params);
             // Check if domain is already pending transfer
             $domain_transfer_in = $api->list_domain_transfer_in($domain);
 
@@ -364,8 +387,8 @@
              * if the cost price now
              * matches the previously fetched amount.
              */
-            $premiumDomainsEnabled = (bool)$params['premiumEnabled'];
-            $premiumDomainsCost = $params['premiumCost'];
+            $premiumDomainsEnabled = !empty($params['premiumEnabled']);
+            $premiumDomainsCost = $params['premiumCost'] ?? null;
 
             // Transfer Domain
             $domain_array = [
@@ -381,6 +404,7 @@
 
             //  Call The Register Domain Function
             $api->transfer_domain($domain_array);
+            return ['success' => true];
         } catch (\Exception $e) {
             return ['error' => $e->getMessage()];
         }
@@ -402,12 +426,12 @@
         try {
             // Registration parameters
             $sld = $params['sld'];
-            $tld = $params['tld'];
+            $tld = ltrim($params['tld'], '.');
             $domain = $sld . '.' . $tld;
             $registrationPeriod = $params['regperiod'];
 
 
-            $api = new DNSAPI($params);
+            $api = Module::api($params);
 
 
             // Get Domain info
@@ -451,11 +475,11 @@
         try {
             // Domain parameters
             $sld = $params['sld'];
-            $tld = $params['tld'];
+            $tld = ltrim($params['tld'], '.');
             $domain = $sld . '.' . $tld;
 
             // Connect To API
-            $api = new DNSAPI($params);
+            $api = Module::api($params);
 
 
             $domain_info = $api->get_domain_nameservers($domain);
@@ -466,7 +490,6 @@
                 $count++;
                 $nameservers['ns' . $count] = $namserver['hostname'];
             }
-            logModuleCall('gateway_srs', 'GetNameservers', $params, $domain_info);
             return $nameservers;
 
         } catch (\Exception $e) {
@@ -493,7 +516,7 @@
         try {
             // Domain parameters
             $sld = $params['sld'];
-            $tld = $params['tld'];
+            $tld = ltrim($params['tld'], '.');
             $domain = $sld . '.' . $tld;
             $registrationPeriod = (
             $params['regperiod'] > 0 ?
@@ -502,7 +525,7 @@
             );
 
             // Connect To API
-            $api = new DNSAPI($params);
+            $api = Module::api($params);
 
 
             // Grab Domain Info
@@ -521,7 +544,7 @@
                     ];
                     foreach ($hosts as $host_key => $host) {
                         if ($host['hostname'] == $params['ns' . $n]) {
-                            $host_record['glue'] = $host['glue'];
+                            $host_record['glue'] = $host['glue'] ?? [];
                         }
                     }
                     // Add Nameserver
@@ -534,13 +557,10 @@
                 'name' => $domain,
                 'period' => $registrationPeriod,
                 'period_unit' => 'y',
-                'authinfo' => $api->generate_password($domain),
                 'hosts' => $new_hosts,
                 'contacts' => $api->get_domain_contacts($domain)["contacts"],
             ];
-            $domain_wid = $api->get_domain_wid($domain);
-            $api->update_domain($update_array, $domain_wid);
-            syslog(LOG_DEBUG, "Nameserver update");
+            $api->update_domain($update_array, $domain);
             return ['success' => 'success'];
 
         } catch (\Exception $e) {
@@ -564,16 +584,16 @@
         try {
             // Domain parameters
             $sld = $params['sld'];
-            $tld = $params['tld'];
+            $tld = ltrim($params['tld'], '.');
             $domain = $sld . '.' . $tld;
 
             // Connect To API
-            $api = new DNSAPI($params);
+            $api = Module::api($params);
 
 
             // Grab Domain Info
             $domain_list = $api->list_domains($domain);
-            $domain_view = $api->view_domain($domain_list[0]['wid']);
+            $domain_view = $api->view_domain($domain);
 
             // Contacts Section
             $contacts = [];
@@ -626,11 +646,11 @@
         try {
             // Domain parameters
             $sld = $params['sld'];
-            $tld = $params['tld'];
+            $tld = ltrim($params['tld'], '.');
             $domain = $sld . '.' . $tld;
 
             // Connect To API
-            $api = new DNSAPI($params);
+            $api = Module::api($params);
 
 
             // Grab Domain Info
@@ -676,7 +696,7 @@
                 $api_contact = $api->contact_info($contact['contact']['id']);
 
                 // Update Contact
-                $api->update_contact($contact_info, $api_contact['wid']);
+                $api->update_contact($contact_info, $contact['contact']['id']);
             }
 
             return ['success' => 'success'];
@@ -699,7 +719,7 @@
     {
         try {
             // Connect To API
-            $api = new DNSAPI($params);
+            $api = Module::api($params);
 
             // Initiate Results List
             $results = new ResultsList();
@@ -707,7 +727,7 @@
             // Loop Through Domains To Check Availability
             foreach ($params['tldsToInclude'] as $tld) {
                 $searchResult = new SearchResult($params['sld'], $tld);
-                $domain_check = $api->domain_check($params['sld'] . $tld);
+                $domain_check = $api->domain_check($params['sld'] . '.' . ltrim($tld, '.'));
 
                 $reason = strtolower($domain_check['results'][0]['reason']);
                 $available = (int)$domain_check['results'][0]['avail'];
@@ -729,14 +749,14 @@
                 $searchResult->setStatus($status);
 
                 // Return premium information if applicable
-                if ($domain_check['charge']['category'] != "standard") {
+                if (isset($domain_check['charge']['category']) && $domain_check['charge']['category'] !== 'standard') {
                     $searchResult->setPremiumDomain(true);
                     $domaincheckaction = $domain_check['charge']['action'];
                     $searchResult->setPremiumCostPricing([
-                        'register' => $domaincheckaction['create'],
-                        'renew' => $domaincheckaction['renew'],
-                        'transfer' => $domaincheckaction['transfer'],
-                        'CurrencyCode' => 'USD'
+                        'register' => $domaincheckaction['create'] ?? null,
+                        'renew' => $domaincheckaction['renew'] ?? null,
+                        'transfer' => $domaincheckaction['transfer'] ?? null,
+                        'CurrencyCode' => $domain_check['charge']['currency'] ?? 'USD'
                     ]);
                 }
                 $results->append($searchResult);
@@ -745,7 +765,6 @@
             return $results;
 
         } catch (\Exception $e) {
-            logModuleCall('gateway_srs', 'CheckAvailability', $params, $e->getMessage());
             return array(
                 'error' => $e->getMessage()
             );
@@ -769,12 +788,13 @@
         try {
             // Domain parameters
             $sld = $params['sld'];
-            $tld = $params['tld'];
+            $tld = ltrim($params['tld'], '.');
             $domain = $sld . '.' . $tld;
 
             // Call API
-            $api = new DNSAPI($params);
+            $api = Module::api($params);
 
+            $domain_lock = false;
             $domain_sync = $api->domain_sync($domain);
             if (isset($domain_sync['statuses'])) {
                 foreach ($domain_sync['statuses'] as $val) {
@@ -784,7 +804,6 @@
                 }
             }
 
-            logModuleCall('gateway_srs', 'GetRegistrarLock', $params, $domain_sync);
 
             if ($domain_lock == true) {
                 return 'locked';
@@ -809,10 +828,10 @@
         try {
             // Domain parameters
             $sld = $params['sld'];
-            $tld = $params['tld'];
+            $tld = ltrim($params['tld'], '.');
             $domain = $sld . '.' . $tld;
 
-            $api = new DNSAPI($params);
+            $api = Module::api($params);
 
             if ($params['lockenabled'] == 'locked') {
                 $api->lock($domain);
@@ -840,7 +859,7 @@
         try {
             // Domain parameters
             $sld = $params['sld'];
-            $tld = $params['tld'];
+            $tld = ltrim($params['tld'], '.');
             $domain = $sld . '.' . $tld;
 
             if (
@@ -849,7 +868,7 @@
                 $tld != 'org.za' &&
                 $tld != 'web.za'
             ) {
-                $dnsapi = new DNSAPI($params);
+                $dnsapi = Module::api($params);
                 // Call api
                 $values["eppcode"] = $dnsapi->domain_info($domain)["authinfo"];
 
@@ -878,14 +897,13 @@
         try {
             // Domain parameters
             $sld = $params['sld'];
-            $tld = $params['tld'];
+            $tld = ltrim($params['tld'], '.');
             $domain = $sld . '.' . $tld;
 
             // Call api
-            $api = new DNSAPI($params);
-            $domain_wid = $api->get_domain_wid($domain);
+            $api = Module::api($params);
 
-            $api->delete_domain($domain_wid);
+            $api->delete_domain($domain);
 
             return array(
                 'success' => 'success',
@@ -908,7 +926,7 @@
         try {
             // Domain parameters
             $sld = $params['sld'];
-            $tld = $params['tld'];
+            $tld = ltrim($params['tld'], '.');
             $domain = $sld . '.' . $tld;
             $registrationPeriod = (
             $params['regperiod'] > 0 ?
@@ -921,12 +939,12 @@
             $ipAddress = $params['ipaddress'];
 
             // Connect To API
-            $api = new DNSAPI($params);
+            $api = Module::api($params);
 
 
             // Grab Domain Info
             $domain_list = $api->list_domains($domain);
-            $domain_view = $api->view_domain($domain_list[0]['wid']);
+            $domain_view = $api->view_domain($domain);
 
             // Prepare Hosts
             $hosts = $domain_view['hosts'];
@@ -935,7 +953,7 @@
                 'glue' => [
                     [
                         'ip' => $params['ipaddress'],
-                        'class_field' => 'v4'
+                        'class_field' => filter_var($params['ipaddress'], FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) ? 'v6' : 'v4'
                     ]
                 ]
             ];
@@ -945,12 +963,11 @@
                 'name' => $domain,
                 'period' => $registrationPeriod,
                 'period_unit' => 'y',
-                'authinfo' => $api->generate_password($domain),
                 'hosts' => $hosts,
                 'contacts' => $domain_view['contacts'],
             ];
 
-            $api->update_domain($update_array, $domain_list[0]['wid']);
+            $api->update_domain($update_array, $domain);
 
             return true;
 
@@ -973,7 +990,7 @@
         try {
             // Domain parameters
             $sld = $params['sld'];
-            $tld = $params['tld'];
+            $tld = ltrim($params['tld'], '.');
             $domain = $sld . '.' . $tld;
             $registrationPeriod = (
             $params['regperiod'] > 0 ?
@@ -987,11 +1004,11 @@
             $NewIpAddress = $params['newipaddress'];
 
             // Connect To API
-            $api = new DNSAPI($params);
+            $api = Module::api($params);
 
             // Grab Domain Info
             $domain_list = $api->list_domains($domain);
-            $domain_view = $api->view_domain($domain_list[0]['wid']);
+            $domain_view = $api->view_domain($domain);
 
             // Prepare Hosts
             $hosts = $domain_view['hosts'];
@@ -1002,17 +1019,17 @@
                         if ($glue['ip'] == $CurrentIpAddress) {
                             // Update Domain & Hosts
                             $hosts[$host_key]['glue'][$glue_key]['ip'] = $NewIpAddress;
+                            $hosts[$host_key]['glue'][$glue_key]['class_field'] = filter_var($NewIpAddress, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) ? 'v6' : 'v4';
 
                             $update_array = [
                                 'name' => $domain,
                                 'period' => $registrationPeriod,
                                 'period_unit' => 'y',
-                                'authinfo' => $api->generate_password($domain),
                                 'hosts' => $hosts,
                                 'contacts' => $domain_view['contacts'],
                             ];
 
-                            $api->update_domain($update_array, $domain_list[0]['wid']);
+                            $api->update_domain($update_array, $domain);
 
                             return true;
                         }
@@ -1042,7 +1059,7 @@
         try {
             // Domain parameters
             $sld = $params['sld'];
-            $tld = $params['tld'];
+            $tld = ltrim($params['tld'], '.');
             $domain = $sld . '.' . $tld;
 
 
@@ -1050,11 +1067,11 @@
             $nameserver = $params['nameserver'];
 
             // Connect To API
-            $api = new DNSAPI($params);
+            $api = Module::api($params);
 
             // Grab Domain Info
             $domain_list = $api->list_domains($domain);
-            $domain_view = $api->view_domain($domain_list[0]['wid']);
+            $domain_view = $api->view_domain($domain);
 
             // Prepare Hosts
             $hosts = $domain_view['hosts'];
@@ -1068,11 +1085,10 @@
             $update_array = [
                 'name' => $domain,
                 'period_unit' => 'y',
-                'authinfo' => $api->generate_password($domain),
                 'hosts' => $new_hosts,
                 'contacts' => $domain_view['contacts'],
             ];
-            $api->update_domain($update_array, $domain_list[0]['wid']);
+            $api->update_domain($update_array, $domain);
 
             return true;
 
@@ -1093,49 +1109,15 @@
     function gateway_srs_Sync($params)
     {
         try {
-            // Domain parameters
-            $sld = $params['sld'];
-            $tld = $params['tld'];
-            $domain = $sld . '.' . $tld;
-
-            // Connect To API
-            $api = new DNSAPI($params);
-
-            // Grab Domain Info
-            $domain_sync = $api->domain_sync($domain);
-
-            // Build Return Result
-            $result = [
-                'expirydate' => NULL,
-                'active' => false,
-                'expired' => false,
-                'transferredAway' => false
-            ];
-
-            if ($domain_sync['detail'] == 'Not found.') {
-                $result['transferredAway'] = true;
-                return $result;
-            }
-
-            if (isset($domain_sync['expiry'])) {
-                $result['expirydate'] = date("Y-m-d", strtotime($domain_sync['expiry']));
-            }
-
-            $expiryTime = strtotime($domain_sync['expiry']);
-            $currentTime = strtotime(date("Y-m-d\TH:i:s\Z"));
-
-            if ($expiryTime > $currentTime) {
-                $result['active'] = true;
-            } else {
-                $result['expired'] = true;
-            }
-
-            return $result;
-
-        } catch (\Exception $e) {
-            return [
-                'error' => $e->getMessage()
-            ];
+            $domain = $params['sld'] . '.' . ltrim($params['tld'], '.');
+            $info = Module::api($params)->domain_sync($domain);
+            $expiry = isset($info['expiry']) ? strtotime($info['expiry']) : false;
+            if ($expiry === false) { return ['error' => 'Gateway SRS returned no valid domain expiry.']; }
+            return ['expirydate' => gmdate('Y-m-d', $expiry), 'active' => $expiry > time(),
+                'expired' => $expiry <= time(), 'transferredAway' => false];
+        } catch (\Throwable $e) {
+            // A 404 or an authentication failure is not evidence that the domain transferred away.
+            return ['error' => $e->getMessage()];
         }
     }
 
@@ -1143,21 +1125,21 @@
      * Update Domain Auto-renew
      */
 
-    function update_autorenew($params)
+    function gateway_srs_update_autorenew($params)
     {
         try {
             // Domain parameters
             $sld = $params['sld'];
-            $tld = $params['tld'];
+            $tld = ltrim($params['tld'], '.');
             $domain = $sld . '.' . $tld;
 
             // Connect To API
-            $api = new DNSAPI($params);
+            $api = Module::api($params);
 
 
             // Grab Domain Info
             $domain_list = $api->list_domains($domain);
-            $domain_view = $api->view_domain($domain_list[0]['wid']);
+            $domain_view = $api->view_domain($domain);
 
             // Update Domain
             $update_array = [
@@ -1168,7 +1150,7 @@
                 'contacts' => $domain_view['contacts'],
                 'autorenew' => false
             ];
-            $api->update_domain($update_array, $domain_list[0]['wid']);
+            $api->update_domain($update_array, $domain);
 
             return true;
 
@@ -1186,7 +1168,7 @@
         try {
             // Domain parameters
             $sld = $params['sld'];
-            $tld = $params['tld'];
+            $tld = ltrim($params['tld'], '.');
             $domain = $sld . '.' . $tld;
             $registrationPeriod = (
             $params['regperiod'] > 0 ?
@@ -1195,11 +1177,11 @@
             );
 
             // Connect To API
-            $api = new DNSAPI($params);
+            $api = Module::api($params);
 
             // Grab Domain Info
             $domain_list = $api->list_domains($domain);
-            $domain_view = $api->view_domain($domain_list[0]['wid']);
+            $domain_view = $api->view_domain($domain);
 
             // Update Domain
             $update_array = [
@@ -1210,7 +1192,7 @@
                 'hosts' => $domain_view['hosts'],
                 'contacts' => $domain_view['contacts'],
             ];
-            $api->update_domain($update_array, $domain_list[0]['wid']);
+            $api->update_domain($update_array, $domain);
 
             return true;
 
@@ -1233,53 +1215,18 @@
     function gateway_srs_TransferSync($params)
     {
         try {
-            // Domain parameters
-            $sld = $params['sld'];
-            $tld = $params['tld'];
-            $domain = $sld . '.' . $tld;
-
-            // Connect To API
-            $api = new DNSAPI($params);
-
-            // Grab Domain
-            $domain_list = $api->list_domains($domain);
-
-            // Grab Domain Transfer In
-            $domain_transfer_in = $api->list_domain_transfer_in($domain);
-
-            // Grab Domain Transfer out
-            $domain_transfer_out = $api->list_domain_transfer_out($domain);
-
-            if (isset($domain_transfer_in[0]['wid']) or isset($domain_transfer_out[0]['wid'])) {
-                // Still pending transfer
-                return [
-                    'completed' => false
-                ];
-            }
-
-            if (isset($domain_list[0]['wid'])) {
-
-                $domain_view = $api->view_domain($domain_list[0]['wid']);
-                $result = [
-                    'completed' => true,
-                    'expirydate' => $domain_view['expiry']
-                ];
-
-                if ($tld != 'co.za') {
-                    gateway_srs_Update_EPP_key($params);
-                }
-                update_autorenew($params);
-
-                return $result;
-
-            } else {
-                return [
-                    'failed' => true
-                ];
-            }
-
-        } catch (\Exception $e) {
-            return gateway_srs_TransferStatusUpdate($params['domainid'], $e->getMessage());
+            $domain = $params['sld'] . '.' . ltrim($params['tld'], '.');
+            $api = Module::api($params);
+            $pending = $api->list_domain_transfer_in($domain);
+            if ($pending) { return []; }
+            $domains = $api->list_domains($domain);
+            if (!$domains) { return []; }
+            $info = $api->view_domain($domain);
+            $expiry = isset($info['expiry']) ? strtotime($info['expiry']) : false;
+            if ($expiry === false) { return ['error' => 'Gateway SRS returned no valid transfer expiry.']; }
+            return ['completed' => true, 'expirydate' => gmdate('Y-m-d', $expiry)];
+        } catch (\Throwable $e) {
+            return ['error' => $e->getMessage()];
         }
     }
 
@@ -1293,11 +1240,11 @@
         try {
             // Domain parameters
             $sld = $params['sld'];
-            $tld = $params['tld'];
+            $tld = ltrim($params['tld'], '.');
             $domain = $sld . '.' . $tld;
 
             // Connect To API
-            $api = new DNSAPI($params);
+            $api = Module::api($params);
 
 
             // Build post data
@@ -1326,11 +1273,11 @@
         try {
             // Domain parameters
             $sld = $params['sld'];
-            $tld = $params['tld'];
+            $tld = ltrim($params['tld'], '.');
             $domain = $sld . '.' . $tld;
 
             // Connect To API
-            $api = new DNSAPI($params);
+            $api = Module::api($params);
 
             // Get WID
             $domain_search = $api->list_domains($domain);
@@ -1361,11 +1308,11 @@
         try {
             // Domain parameters
             $sld = $params['sld'];
-            $tld = $params['tld'];
+            $tld = ltrim($params['tld'], '.');
             $domain = $sld . '.' . $tld;
 
             // Connect To API
-            $api = new DNSAPI($params);
+            $api = Module::api($params);
 
 
             // Get WID
@@ -1401,11 +1348,11 @@
         try {
             // Domain parameters
             $sld = $params['sld'];
-            $tld = $params['tld'];
+            $tld = ltrim($params['tld'], '.');
             $domain = $sld . '.' . $tld;
 
             // Call API
-            $api = new DNSAPI($params);
+            $api = Module::api($params);
 
             $api->lock($domain);
 
@@ -1427,11 +1374,11 @@
         try {
             // Domain parameters
             $sld = $params['sld'];
-            $tld = $params['tld'];
+            $tld = ltrim($params['tld'], '.');
             $domain = $sld . '.' . $tld;
 
             //  Call API
-            $api = new DNSAPI($params);
+            $api = Module::api($params);
 
             $api->unlock($domain);
 
@@ -1447,11 +1394,11 @@
         try {
             // Domain parameters
             $sld = $params['sld'];
-            $tld = $params['tld'];
+            $tld = ltrim($params['tld'], '.');
             $domain = $sld . '.' . $tld;
 
             // Call API
-            $api = new DNSAPI($params);
+            $api = Module::api($params);
 
             $api->block($domain);
 
@@ -1468,11 +1415,11 @@
         try {
             // Domain parameters
             $sld = $params['sld'];
-            $tld = $params['tld'];
+            $tld = ltrim($params['tld'], '.');
             $domain = $sld . '.' . $tld;
 
             // Call API
-            $api = new DNSAPI($params);
+            $api = Module::api($params);
 
             $api->unblock($domain);
 
@@ -1490,90 +1437,26 @@
 
     function gateway_srs_AdminCustomButtonArray($params)
     {
-        $buttonarray = [
-            'Update EPP Key' => 'Update_EPP_key'
-        ];
-
-        //print_r($params);exit;
-        // Domain parameters
-        $sld = $params['sld'];
-        $tld = $params['tld'];
-        $domain = $sld . '.' . $tld;
-
-        $pdo = WHMCS\Database\Capsule::connection()->getPdo();
-
-        // Replace 'registrar_module_name' with the name of the registrar module
-        $registrarModuleName = $params['registrar'];
-
-        // Prepare and execute the query to fetch registrar configuration options
-        $query = $pdo->prepare("
-                SELECT *
-                FROM tblregistrars r                
-                WHERE registrar = :registrarModuleName
-            ");
-        $query->execute(['registrarModuleName' => $registrarModuleName]);
-        $RegistrarConfigOptions = $query->fetchAll(PDO::FETCH_ASSOC);
-
-        // Output or process the configuration options as needed
-        foreach ($RegistrarConfigOptions as $RegistrarConfigOption) {
-
-            $command = 'DecryptPassword';
-            $postData = array(
-                'password2' => $RegistrarConfigOption['value'],
-            );
-
-            $results = localAPI($command, $postData);
-            $params[$RegistrarConfigOption['setting']] = $results['password'];
-        }
-
-        // Call API
-        $api = new DNSAPI($params);
-
-        $domain_sync = $api->domain_sync($domain);
-        //print_r($domain_lock);
-        if (isset($domain_sync['statuses'])) {
-            foreach ($domain_sync['statuses'] as $val) {
-                if ($val['code'] == 'clientTransferProhibited') {
-                    $domain_lock = true;
-                }
-                if ($val['code'] == 'pendingTransfer') {
-                    $pendingTransfer = true;
-                }
-                if ($val['code'] == 'clientUpdateProhibited') {
-                    $domain_block = true;
-                }
-                if ($val['code'] == 'clientHold') {
-                    $domain_suspend = true;
-                }
+        $buttons = ['Update EPP Key' => 'Update_EPP_key'];
+        try {
+            $domain = $params['sld'] . '.' . ltrim($params['tld'], '.');
+            $api = Module::api(array_merge(Module::settings(), $params));
+            $codes = array_column($api->domain_sync($domain)['statuses'] ?? [], 'code');
+            if (in_array('pendingTransfer', $codes, true)) {
+                $buttons += ['Approve Transfer' => 'Approve_Transfer', 'Reject Transfer' => 'Reject_Transfer', 'Cancel Transfer' => 'Cancel_Transfer'];
             }
+            foreach ([
+                ['clientTransferProhibited', 'Unlock Transfers', 'Unlock_Domain', 'Lock Transfers', 'Lock_Domain'],
+                ['clientHold', 'Unsuspend', 'Unsuspend_Domain', 'Suspend', 'Suspend_Domain'],
+                ['clientUpdateProhibited', 'Unblock Updates', 'Unblock_Domain', 'Block Updates', 'Block_Domain'],
+            ] as [$status, $onLabel, $onAction, $offLabel, $offAction]) {
+                if (in_array($status, $codes, true)) { $buttons[$onLabel] = $onAction; }
+                else { $buttons[$offLabel] = $offAction; }
+            }
+        } catch (\Throwable $e) {
+            // An expired token must not prevent WHMCS from displaying the domain admin page.
         }
-        //clientTransferProhibited
-        if ($pendingTransfer == true) {
-            $buttonarray['Approve Transfer'] = 'Approve_Transfer';
-            $buttonarray['Reject Transfer'] = 'Reject_Transfer';
-            $buttonarray['Cancel Transfer'] = 'Cancel_Transfer';
-        }
-
-        if ($domain_lock == true) {
-            $buttonarray['Unlock Transfers'] = 'Unlock_Domain';
-        } else {
-            $buttonarray['Lock Transfers'] = 'Lock_Domain';
-        }
-
-        if ($domain_suspend == true) {
-            $buttonarray['Unsuspend'] = 'Unsuspend_Domain';
-        } else {
-            $buttonarray['Suspend'] = 'Suspend_Domain';
-        }
-
-        if ($domain_block == true) {
-            $buttonarray['Unblock Updates'] = 'Unblock_Domain';
-        } else {
-            $buttonarray['Block Updates'] = 'Block_Domain';
-        }
-
-
-        return $buttonarray;
+        return $buttons;
     }
 
     # Function update domain status for transfer
@@ -1588,10 +1471,10 @@
         try {
 
             $sld = $params['sld'];
-            $tld = $params['tld'];
+            $tld = ltrim($params['tld'], '.');
             $domain = $sld . '.' . $tld;
 
-            $api = new DNSAPI($params);
+            $api = Module::api($params);
             $result = $api->suspend($domain);
 
             return $result;
@@ -1608,10 +1491,10 @@
         try {
 
             $sld = $params['sld'];
-            $tld = $params['tld'];
+            $tld = ltrim($params['tld'], '.');
             $domain = $sld . '.' . $tld;
 
-            $api = new DNSAPI($params);
+            $api = Module::api($params);
             $result = $api->unsuspend($domain);
 
             return $result;
@@ -1625,8 +1508,8 @@
 
     function gateway_srs_TransferStatusUpdate($domainID, $message)
     {
-        if (strpos($message, 'pendingTransfer')) {
-            updateDomainDatabaseStatus($domainID, 'Pending Transfer');
+        if (strpos($message, 'pendingTransfer') !== false) {
+            gateway_srs_updateDomainDatabaseStatus($domainID, 'Pending Transfer');
             return ['error' => 'Domain status "Pending Transfer"'];
         }
         return ['error' => $message];
@@ -1634,46 +1517,35 @@
 
     function gateway_srs_GetTldPricing($params)
     {
-        $results = new ResultsList();
-
-        $api = new DNSAPI($params);
-        $tld_pricing = $api->tld_pricing();
-
-        foreach ($tld_pricing as $key => $value) {
-
-            foreach ($value['prices'] as $k => $v) {
-
-                if ($v['action'] == 'new' and $v['product_code'] == $v['tld']. '_' . $v['action'])
-                    $registrationPrice = $v['price'];
-
-                if ($v['action'] == 'renew')
-                    $renewalPrice = $v['price'];
-
-                if ($v['action'] == 'transfer')
-                    $transferPrice = $v['price'];
-
-                if ($v['action'] == 'redeem')
-                    $redemptionFee = $v['price'];
-
-                $currencyCode = $v['currency'];
+        try {
+            $rows = Module::api($params)->tld_pricing();
+            $grouped = [];
+            foreach ($rows as $row) {
+                if (!isset($row['tld'], $row['action'], $row['price'], $row['currency']) || !is_numeric($row['price'])) {
+                    throw new \RuntimeException('Gateway SRS returned invalid pricing data.');
+                }
+                $action = $row['action'];
+                // Exclude premium/closed/special products from standard retail cost imports.
+                if (!in_array($action, ['new', 'renew', 'transfer', 'redeem'], true)
+                    || ($row['product_code'] ?? '') !== $row['tld'] . '_' . $action) { continue; }
+                $tld = $row['tld'];
+                if (isset($grouped[$tld]['currency']) && $grouped[$tld]['currency'] !== $row['currency']) {
+                    throw new \RuntimeException('Gateway SRS returned mixed currencies for one extension.');
+                }
+                $grouped[$tld]['currency'] = $row['currency'];
+                $grouped[$tld][$action] = (float) $row['price'];
             }
-
-            //->setRedemptionFeeDays()
-
-            $item = (new ImportItem)
-                ->setExtension($value['tld'])
-                ->setMinYears(1)
-                ->setMaxYears(1)
-                ->setRegisterPrice($registrationPrice)
-                ->setRenewPrice($renewalPrice)
-                ->setTransferPrice($transferPrice)
-                ->setRedemptionFeePrice($redemptionFee)
-                ->setCurrency($currencyCode)
-                ->setEppRequired(true);
-
-            $results[] = $item;
-        }
-        return $results;
+            $results = new \WHMCS\Results\ResultsList();
+            foreach ($grouped as $tld => $prices) {
+                if (!isset($prices['new'])) { continue; }
+                $item = (new ImportItem())->setExtension($tld)->setMinYears(1)->setMaxYears(1)
+                    ->setRegisterPrice($prices['new'])->setRenewPrice($prices['renew'] ?? null)
+                    ->setTransferPrice($prices['transfer'] ?? null)->setRedemptionFeePrice($prices['redeem'] ?? null)
+                    ->setCurrency($prices['currency'])->setEppRequired(!in_array($tld, ['co.za', 'net.za', 'org.za', 'web.za'], true));
+                $results[] = $item;
+            }
+            return $results;
+        } catch (\Throwable $e) { return ['error' => $e->getMessage()]; }
     }
 
     # Function update domain status in WHMCS database
@@ -1681,7 +1553,7 @@
      *
      */
 
-    function updateDomainDatabaseStatus($domainId, $status)
+    function gateway_srs_updateDomainDatabaseStatus($domainId, $status)
     {
         return Capsule::table('tbldomains')
             ->where('id', $domainId)
@@ -1689,4 +1561,24 @@
                     'status' => $status
                 )
             );
+    }
+
+
+    function gateway_srs_GetDomainInformation($params)
+    {
+        try {
+            $name = $params['sld'] . '.' . ltrim($params['tld'], '.');
+            $info = Module::api($params)->view_domain($name);
+            $nameservers = [];
+            foreach ($info['hosts'] ?? $info['nameservers'] ?? [] as $host) {
+                $nameservers['ns' . (count($nameservers) + 1)] = is_array($host) ? $host['hostname'] : $host;
+            }
+            $statuses = array_column($info['statuses'] ?? [], 'code');
+            $expiry = isset($info['expiry']) ? \WHMCS\Carbon::parse($info['expiry']) : null;
+            $status = $expiry && $expiry->isPast() ? 'Expired' : 'Active';
+            if (array_intersect(['clientHold', 'serverHold'], $statuses)) { $status = 'Suspended'; }
+            return (new \WHMCS\Domain\Registrar\Domain())->setDomain($name)->setNameservers($nameservers)
+                ->setExpiryDate($expiry)->setRegistrationStatus($status)
+                ->setTransferLock(in_array('clientTransferProhibited', $statuses, true));
+        } catch (\Throwable $e) { return ['error' => $e->getMessage()]; }
     }

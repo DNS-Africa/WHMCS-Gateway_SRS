@@ -1,0 +1,30 @@
+{
+  "files": {
+    "modules/addons/gateway_srs_manager/Recovery.php": "ed4e9d099ac823c20e650990f2e00f5f001ce7794380eca308d7d15f72a0ff9b",
+    "modules/addons/gateway_srs_manager/gateway_srs_manager.php": "7c459cd57d0e43daba20697aec20a2e2182f6bba462d5c9a60eaab6d447527dc",
+    "modules/registrars/gateway_srs/gateway_srs.php": "134fab15595d1a1135bdf5a593aaee69a75a6f0d058c7f2655f05c31fb7cfc5a",
+    "modules/registrars/gateway_srs/hooks.php": "42f658c625822634464d14c53cd679920b8f23600b2fbf81708cc7022dc28c5d",
+    "modules/registrars/gateway_srs/lib/DNSAPI.php": "e2172a656f53670c08c130c18a27cd3cf3f3c70300d89cfb71de743428b4cdf4",
+    "modules/registrars/gateway_srs/lib/Files.php": "9bbc1764a0f2f1c7e23097f885e61ddbb93d69c315caf1429491ec19aa0c2fe9",
+    "modules/registrars/gateway_srs/lib/Module.php": "0dd4be63eb23c07b30d8fd43da9c302c100def5fdc11d05b63baf4ea85aeac57",
+    "modules/registrars/gateway_srs/lib/Monitor.php": "28fa9aacbc7aa3884375adb07ac1b72cc71d2f0a806bed0c01b9be7371e96478",
+    "modules/registrars/gateway_srs/lib/ReleaseClient.php": "8f03ec760b1d65f923491fb3149af49bf6f5d5b5bef7968595ae8df00065b417",
+    "modules/registrars/gateway_srs/lib/RestAPIException.php": "b7b2eb13fe7cc870822f324e219724210cc62df6ec5c568e1098946998b0bdf0",
+    "modules/registrars/gateway_srs/lib/RuntimeState.php": "50a5b4dca98ff3676355dab6eb70fd31d25af354765ce349bdfab2401eabdc9d",
+    "modules/registrars/gateway_srs/lib/SafeLog.php": "15ddbab924d46a8b9525eaca267805ab14b0baccd4b10a159cf8c139aa9b6cd3",
+    "modules/registrars/gateway_srs/lib/TokenStatus.php": "e9c202e0bcd781c41a9c7f966a5348def6b6f1bbd06840f4c644f4d28872dc31",
+    "modules/registrars/gateway_srs/lib/Updater.php": "b17994d3bb5fdd6c6df49efd841354cc78c38b99b75e7d65c66fef34e2392336",
+    "modules/registrars/gateway_srs/lib/bootstrap.php": "74fd3deb0864035c71c3c11715bfdbddfedab8cefd9fc5a43174b32afa0c95bb",
+    "modules/registrars/gateway_srs/logo.png": "ac04d6379d194c4581e0a9345425175e93f6aa8685f4ace2211e01f23c0e6d33",
+    "modules/registrars/gateway_srs/release-public-key.pem": "c8e1fe791651ed2a12ae10ed976c2317c5f26a323edf93da1cb501bcfc67fcbe",
+    "modules/registrars/gateway_srs/version.json": "4f87f69e6024c0a9e6825670e055d896aa33581a2e2ded6ed17a0d463159ae14",
+    "modules/registrars/gateway_srs/whmcs.json": "b266059339f9872a92fcefad7f36304ac23be092e888003084c2fe4ebe1ac1cf"
+  },
+  "manager_api": 1,
+  "module": "gateway_srs",
+  "php_min": "8.1.0",
+  "schema": 1,
+  "sha256": "63cc6ddc9689bc3b21724bf63516c1d504e66c66e64302acb16216cccbd54e3b",
+  "version": "4.1.0",
+  "whmcs_min": "8.6.0"
+}
