@@ -49,6 +49,10 @@
          */
         protected $throw_http_error=true;
         protected $curl_timeout=60;
+        /** Number of seconds before expiry at which a cached token is refreshed */
+        protected const TOKEN_REFRESH_MARGIN_SECONDS = 120;
+        /** Lifetime assumed for a token whose JWT exp claim cannot be parsed */
+        protected const TOKEN_FALLBACK_LIFETIME_SECONDS = 3600;
         protected $curl_connect_timeout=20;
         protected $curl_followlocation=1;
         protected $curl_sslverifypeer=true;
@@ -63,6 +67,14 @@
          * @var string
          */
         protected $bearer = '';
+        /**
+         * @var string[] the request headers last set on the current curl handle
+         */
+        protected $currentHeaders = array();
+        /**
+         * @var bool guards against re-auth recursion when the login call itself fails
+         */
+        protected $auth_retry_in_progress = false;
         protected $lock_statusses = [
             'clientTransferProhibited',
             'clientUpdateProhibited',
@@ -89,20 +101,43 @@
             $this->doLogin();
         }
 
+        /**
+         * Decode the `exp` claim (unix timestamp) from a JWT, unverified.
+         * @return int|null null when the token cannot be parsed.
+         */
+        static public function jwtExpiry(string $jwt): ?int
+        {
+            $parts = explode('.', $jwt);
+            if (count($parts) !== 3) {
+                return null;
+            }
+            $segment = $parts[1];
+            $padded = $segment . str_repeat('=', (4 - strlen($segment) % 4) % 4);
+            $payload = base64_decode(strtr($padded, '-_', '+/'), true);
+            if ($payload === false) {
+                return null;
+            }
+            $claims = json_decode($payload, true);
+            if (!is_array($claims) || !isset($claims['exp']) || !is_numeric($claims['exp'])) {
+                return null;
+            }
+            return (int)$claims['exp'];
+        }
+
         function doLogin()
         {
-            session_start();
-            if(isset($_SESSION['apitokentime']) and isset($_SESSION['appbearer']) and isset($_SESSION['epp_username'])) {
-                $dateTimeObject1 = date_create($_SESSION['apitokentime']);
-                $dateTimeObject2 = date_create(date('H:i:s'));
-                $interval = date_diff($dateTimeObject1, $dateTimeObject2);
-
-                $minutes = $interval->days * 24 * 60;
-                $minutes += $interval->h * 60;
-                $minutes += $interval->i;
-
-                # only valid for 24 hours so just shy of 1440
-                if ($minutes < 60) {
+            if (session_status() === PHP_SESSION_NONE) {
+                session_start();
+            }
+            if(isset($_SESSION['appbearer']) and isset($_SESSION['epp_username'])) {
+                $token_valid = false;
+                if (isset($_SESSION['apitokenexp']) and is_int($_SESSION['apitokenexp'])) {
+                    $token_valid = $_SESSION['apitokenexp'] - time() > self::TOKEN_REFRESH_MARGIN_SECONDS;
+                } elseif (isset($_SESSION['apitokenissued']) and is_int($_SESSION['apitokenissued'])) {
+                    # no parseable exp: fall back to an assumed token lifetime
+                    $token_valid = time() - $_SESSION['apitokenissued'] < self::TOKEN_FALLBACK_LIFETIME_SECONDS;
+                }
+                if ($token_valid) {
                     $this->bearer = $_SESSION['appbearer'];
                     $this->epp_username = $_SESSION['epp_username'];
                     return;
@@ -113,11 +148,12 @@
             $login = $this->postCH($this->portal_api_url."auth-jwt/", $login_details);
             $this->bearer = $login['token'];
             $this->epp_username = $this->getCH($this->portal_api_url."auth-epp-username/")["epp_username"];
-            $_SESSION['apitokentime']=date('H:i:s');
+            $_SESSION['apitokenexp'] = self::jwtExpiry($this->bearer);
+            $_SESSION['apitokenissued'] = time();
             $_SESSION['appbearer']=$this->bearer;
             $_SESSION['epp_username']=$this->epp_username;
 
-            syslog(LOG_DEBUG, "New API bearer token valid from: " . $_SESSION['apitokentime'] );
+            syslog(LOG_DEBUG, "New API bearer token expires: " . ($_SESSION['apitokenexp'] ?? 'unknown') );
         }
 
         /**
@@ -130,7 +166,8 @@
             $ch = curl_init();
 
             $authorization = "Authorization: Bearer " . $this->bearer; // Prepare the authorisation token
-            curl_setopt($ch, CURLOPT_HTTPHEADER, array($this->curl_headers, $authorization));
+            $this->currentHeaders = array_merge($this->curl_headers, array($authorization));
+            curl_setopt($ch, CURLOPT_HTTPHEADER, $this->currentHeaders);
             curl_setopt($ch, CURLOPT_URL, $url);
             curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
             curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, $this->curl_sslverifypeer);
@@ -199,6 +236,7 @@
 
             $ch = $this->initCH($url);
             curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'PUT');
+            $this->currentHeaders = $curl_headers;
             curl_setopt($ch, CURLOPT_HTTPHEADER, $curl_headers);
             curl_setopt($ch, CURLOPT_POSTFIELDS, $data_json);
 
@@ -242,6 +280,7 @@
                 );
             }
             
+            $this->currentHeaders = $curl_headers;
             curl_setopt($ch, CURLOPT_HTTPHEADER, $curl_headers);
             curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'POST');
 
@@ -259,7 +298,7 @@
          * @return string|array
          * @throws RestAPIException
          */
-        private function execCH($ch)
+        private function execCH($ch, bool $auth_retry = false)
         {
             $verbose = NULL;
             if ($this->debug) {
@@ -297,13 +336,28 @@
 
                 /** If detail for error exists, add message to error */
                 if(isset($output['detail'])){
-                    # Re-authenticate and retry if the signature has expired
-                    if ($output['detail'] == 'Signature has expired.'){
-                        unset($_SESSION['apitokentime']);
-                        unset($_SESSION['appbearer']);
-                        unset($_SESSION['epp_username']);
-                        $this->doLogin();
-                        return $this->execCH($ch);
+                    # Re-authenticate once and retry if we got a 401 / expired token
+                    if (!$auth_retry && !$this->auth_retry_in_progress && ($response_code === 401 || $output['detail'] == 'Signature has expired.')){
+                        $this->auth_retry_in_progress = true;
+                        try {
+                            unset($_SESSION['apitokentime'], $_SESSION['appbearer'], $_SESSION['epp_username'], $_SESSION['apitokenexp'], $_SESSION['apitokenissued']);
+                            $this->doLogin();
+                            # Re-arm the handle with the new bearer before retrying
+                            $rebuilt = array();
+                            foreach ($this->currentHeaders as $header) {
+                                if (stripos($header, 'Authorization:') === 0) {
+                                    continue;
+                                }
+                                $rebuilt[] = $header;
+                            }
+                            $rebuilt[] = 'Authorization: Bearer ' . $this->bearer;
+                            $this->currentHeaders = $rebuilt;
+                            curl_setopt($ch, CURLOPT_HTTPHEADER, $this->currentHeaders);
+                            curl_setopt($ch, CURLOPT_XOAUTH2_BEARER, $this->bearer);
+                        } finally {
+                            $this->auth_retry_in_progress = false;
+                        }
+                        return $this->execCH($ch, true);
                     }
                     $detail_message = $output['detail'];
 
