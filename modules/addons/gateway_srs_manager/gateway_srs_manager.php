@@ -3,10 +3,12 @@ if (!defined('WHMCS')) { die('This file cannot be accessed directly'); }
 
 require_once __DIR__ . '/Recovery.php';
 
+function gateway_srs_manager_api(): int { return 2; }
+
 function gateway_srs_manager_config()
 {
-    return ['name' => 'Gateway SRS Manager', 'description' => 'JWT status, release notifications, signed registrar updates and recovery.',
-        'version' => '1.0.0', 'author' => 'DNS Africa', 'language' => 'english'];
+    return ['name' => 'Gateway SRS Manager', 'description' => 'Account balance, DNSSEC, JWT status, signed registrar updates and recovery.',
+        'version' => '1.1.0', 'author' => 'DNS Africa', 'language' => 'english'];
 }
 
 function gateway_srs_manager_activate() { return ['status' => 'success', 'description' => 'Grant access to the appropriate administrator roles.']; }
@@ -76,6 +78,12 @@ function gateway_srs_manager_output($vars)
         } elseif ($action !== '') { throw new \RuntimeException('Unknown module action.'); }
         $local = $module::version();
         echo '<h2>Gateway SRS</h2><p>Installed registrar version: <strong>' . $escape($local['version']) . '</strong></p>';
+        if ($settings && method_exists($module, 'balanceMonitor')) {
+            echo \WHMCS\Module\Registrar\gateway_srs\BalanceMonitor::panel($module::balanceMonitor()->status($settings));
+        }
+        if ($settings && class_exists(\WHMCS\Module\Registrar\gateway_srs\DnssecPage::class) && isset($_GET['domainid'])) {
+            echo \WHMCS\Module\Registrar\gateway_srs\DnssecPage::admin($settings, $vars['modulelink']);
+        }
         if (!$settings) { echo '<p>Activate the Gateway SRS registrar and configure its credentials to enable monitoring.</p>'; }
         $token = $monitor->tokenStatus($settings);
         if ($token) {

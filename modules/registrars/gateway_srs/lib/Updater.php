@@ -167,8 +167,10 @@ final class Updater
             throw new \RuntimeException('Cannot determine the installed WHMCS version.');
         }
         $platformVersion = $parts[1];
+        $managerApi = function_exists('gateway_srs_manager_api') ? \gateway_srs_manager_api() : 1;
         if (!isset($manifest['php_min'], $manifest['whmcs_min'], $manifest['manager_api'])
-            || $manifest['manager_api'] !== 1 || version_compare(PHP_VERSION, $manifest['php_min'], '<')
+            || !is_int($manifest['manager_api']) || $manifest['manager_api'] < 1 || $manifest['manager_api'] > $managerApi
+            || version_compare(PHP_VERSION, $manifest['php_min'], '<')
             || version_compare($platformVersion, $manifest['whmcs_min'], '<')
             || (isset($manifest['php_max']) && version_compare(PHP_VERSION, $manifest['php_max'], '>'))
             || (isset($manifest['whmcs_max']) && version_compare($platformVersion, $manifest['whmcs_max'], '>'))) {

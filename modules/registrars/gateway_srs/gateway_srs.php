@@ -23,7 +23,7 @@
 
     require_once __DIR__ . '/lib/bootstrap.php';
 
-    use \WHMCS\Module\Registrar\gateway_srs\Module;
+    use \WHMCS\Module\Registrar\gateway_srs\{Module, PremiumPricing, Lifecycle, DnssecPage};
     use \WHMCS\Module\Registrar\gateway_srs\RuntimeState;
     use \WHMCS\Module\Registrar\gateway_srs\RestAPIException;
 
@@ -127,6 +127,26 @@
                 'Type' => 'yesno',
                 'Description' => 'Log HTTP metadata only. Credentials and API bodies are never logged.',
             ],
+            'Premium_Currency' => [
+                'FriendlyName' => 'Premium cost currency', 'Type' => 'text', 'Size' => '5', 'Default' => '',
+                'Description' => 'ISO currency of saved WHMCS premium costs, e.g. ZAR. Required before premium purchases; must match current quotes.'
+            ],
+            'Balance_Alerts' => [
+                'FriendlyName' => 'Low-funds alerts', 'Type' => 'yesno',
+                'Description' => 'Email system administrators when available credit reaches the thresholds below. Balance remains visible with alerts disabled.'
+            ],
+            'Balance_Currency' => [
+                'FriendlyName' => 'Balance alert currency', 'Type' => 'text', 'Size' => '5', 'Default' => '',
+                'Description' => 'Account ISO currency, e.g. ZAR. Must match the portal account.'
+            ],
+            'Balance_Low' => [
+                'FriendlyName' => 'Low available credit', 'Type' => 'text', 'Size' => '15', 'Default' => '1000',
+                'Description' => 'Warn at or below this amount in the alert currency.'
+            ],
+            'Balance_Critical' => [
+                'FriendlyName' => 'Critical available credit', 'Type' => 'text', 'Size' => '15', 'Default' => '0',
+                'Description' => 'Send an urgent alert at or below this amount. Must be lower than the low threshold.'
+            ],
         ];
     }
 
@@ -136,6 +156,10 @@
     function gateway_srs_config_validate($params)
     {
         try {
+            \WHMCS\Module\Registrar\gateway_srs\BalanceMonitor::thresholds($params);
+            if (trim($params['Premium_Currency'] ?? '') !== '') {
+                \WHMCS\Module\Registrar\gateway_srs\Amount::currency(strtoupper(trim($params['Premium_Currency'])));
+            }
             Module::api($params)->validateConnection();
         } catch (\Throwable $e) {
             throw new InvalidConfiguration($e->getMessage());
@@ -184,6 +208,8 @@
 
             // Connect To API
             $api = Module::api($params);
+
+            $agreement = PremiumPricing::agreement($api, $params, $domain, 'create');
 
             // Registrant information
             $registrant_info = [
@@ -263,22 +289,6 @@
             $tech_info = $admin_info;
             $tech_info["id"] = $api->generate_id($domain);
 
-            /**
-             * Premium domain parameters.
-             *
-             * Premium domains enabled informs you
-             * if the admin user has enabled
-             * the selling of premium domain names.
-             * If this domain is a premium name,
-             * `premiumCost` will contain the cost
-             * price retrieved at the time of
-             * the order being placed. The premium
-             * order should only be processed
-             * if the cost price now matches the
-             * previously fetched amount.
-             */
-            $premiumDomainsEnabled = !empty($params['premiumEnabled']);
-            $premiumDomainsCost = $params['premiumCost'] ?? null;
 
             // Create Contacts
             $registrant_contact = $api->setcontact($registrant_info);
@@ -322,10 +332,7 @@
                 ]
             ];
 
-            //  Add Premium Charge If Applicable
-            if ($premiumDomainsEnabled && $premiumDomainsCost) {
-                $domain['charge'] = array('price' => $premiumDomainsCost);
-            }
+            $domain = array_merge($domain, $agreement);
 
             //  Call The Register Domain Function
             $api->register_domain($domain);
@@ -372,23 +379,6 @@
                 return ['success' => true];
             }
 
-            /**
-             * Premium domain parameters.
-             *
-             * Premium domains enabled informs you if
-             * the admin user has enabled
-             * the selling of premium domain names.
-             * If this domain is a premium name,
-             * `premiumCost` will contain the cost price
-             * retrieved at the time of
-             * the order being placed.
-             * The premium order should
-             * only be processed
-             * if the cost price now
-             * matches the previously fetched amount.
-             */
-            $premiumDomainsEnabled = !empty($params['premiumEnabled']);
-            $premiumDomainsCost = $params['premiumCost'] ?? null;
 
             // Transfer Domain
             $domain_array = [
@@ -397,10 +387,7 @@
                 'period' => $registrationPeriod
             ];
 
-            // Add Premium Charge If Applicable
-            if ($premiumDomainsEnabled && $premiumDomainsCost) {
-                $domain_array['charge']['price'] = $premiumDomainsCost;
-            }
+            $domain_array = array_merge($domain_array, PremiumPricing::agreement($api, $params, $domain, 'transfer'));
 
             //  Call The Register Domain Function
             $api->transfer_domain($domain_array);
@@ -445,6 +432,7 @@
                 'curExpDate' => $domain_list[0]['curExpDate']
             ];
 
+            $renew_array = array_merge($renew_array, PremiumPricing::agreement($api, $params, $domain, 'renew'));
             $api->renew_domain($renew_array);
 
             return [
@@ -727,9 +715,9 @@
             // Loop Through Domains To Check Availability
             foreach ($params['tldsToInclude'] as $tld) {
                 $searchResult = new SearchResult($params['sld'], $tld);
-                $domain_check = $api->domain_check($params['sld'] . '.' . ltrim($tld, '.'));
+                [$domain_check, $quotes] = PremiumPricing::fetch($api, $params['sld'] . '.' . ltrim($tld, '.'));
 
-                $reason = strtolower($domain_check['results'][0]['reason']);
+                $reason = strtolower($domain_check['results'][0]['reason'] ?? '');
                 $available = (int)$domain_check['results'][0]['avail'];
 
                 $status = SearchResult::STATUS_NOT_REGISTERED;
@@ -748,15 +736,15 @@
 
                 $searchResult->setStatus($status);
 
-                // Return premium information if applicable
-                if (isset($domain_check['charge']['category']) && $domain_check['charge']['category'] !== 'standard') {
+                if (array_filter($quotes, static fn ($quote) => $quote['premium'])) {
                     $searchResult->setPremiumDomain(true);
-                    $domaincheckaction = $domain_check['charge']['action'];
+                    $currencies = array_unique(array_column($quotes, 'currency'));
+                    if (count($currencies) !== 1) { throw new \RuntimeException('Gateway SRS returned mixed premium currencies.'); }
                     $searchResult->setPremiumCostPricing([
-                        'register' => $domaincheckaction['create'] ?? null,
-                        'renew' => $domaincheckaction['renew'] ?? null,
-                        'transfer' => $domaincheckaction['transfer'] ?? null,
-                        'CurrencyCode' => $domain_check['charge']['currency'] ?? 'USD'
+                        'register' => isset($quotes['create']) ? (float) $quotes['create']['price'] : null,
+                        'renew' => isset($quotes['renew']) ? (float) $quotes['renew']['price'] : null,
+                        'transfer' => isset($quotes['transfer']) ? (float) $quotes['transfer']['price'] : null,
+                        'CurrencyCode' => reset($currencies)
                     ]);
                 }
                 $results->append($searchResult);
@@ -1110,11 +1098,7 @@
     {
         try {
             $domain = $params['sld'] . '.' . ltrim($params['tld'], '.');
-            $info = Module::api($params)->domain_sync($domain);
-            $expiry = isset($info['expiry']) ? strtotime($info['expiry']) : false;
-            if ($expiry === false) { return ['error' => 'Gateway SRS returned no valid domain expiry.']; }
-            return ['expirydate' => gmdate('Y-m-d', $expiry), 'active' => $expiry > time(),
-                'expired' => $expiry <= time(), 'transferredAway' => false];
+            return Lifecycle::sync(Module::api($params), $domain);
         } catch (\Throwable $e) {
             // A 404 or an authentication failure is not evidence that the domain transferred away.
             return ['error' => $e->getMessage()];
@@ -1216,15 +1200,7 @@
     {
         try {
             $domain = $params['sld'] . '.' . ltrim($params['tld'], '.');
-            $api = Module::api($params);
-            $pending = $api->list_domain_transfer_in($domain);
-            if ($pending) { return []; }
-            $domains = $api->list_domains($domain);
-            if (!$domains) { return []; }
-            $info = $api->view_domain($domain);
-            $expiry = isset($info['expiry']) ? strtotime($info['expiry']) : false;
-            if ($expiry === false) { return ['error' => 'Gateway SRS returned no valid transfer expiry.']; }
-            return ['completed' => true, 'expirydate' => gmdate('Y-m-d', $expiry)];
+            return Lifecycle::transfer(Module::api($params), $domain);
         } catch (\Throwable $e) {
             return ['error' => $e->getMessage()];
         }
@@ -1564,6 +1540,29 @@
     }
 
 
+    function gateway_srs_ClientAreaCustomButtonArray()
+    {
+        return ['DNSSEC' => 'DNSSEC'];
+    }
+
+    function gateway_srs_DNSSEC($params)
+    {
+        return ['templatefile' => 'dnssec', 'vars' => ['dnssecHtml' => DnssecPage::client($params)]];
+    }
+
+    function gateway_srs_ClientArea($params)
+    {
+        return '<p><a class="btn btn-default" href="clientarea.php?action=domaindetails&amp;domainid='
+            . (int) ($params['domainid'] ?? 0) . '&amp;modop=custom&amp;a=DNSSEC">Manage DNSSEC</a></p>';
+    }
+
+    function gateway_srs_AdminClientDomainsTabFields($params)
+    {
+        if (!Module::canManage()) { return []; }
+        return ['DNSSEC' => '<a href="addonmodules.php?module=gateway_srs_manager&amp;domainid='
+            . (int) ($params['domainid'] ?? 0) . '">Manage DNSSEC records</a>'];
+    }
+
     function gateway_srs_GetDomainInformation($params)
     {
         try {
@@ -1573,12 +1572,12 @@
             foreach ($info['hosts'] ?? $info['nameservers'] ?? [] as $host) {
                 $nameservers['ns' . (count($nameservers) + 1)] = is_array($host) ? $host['hostname'] : $host;
             }
-            $statuses = array_column($info['statuses'] ?? [], 'code');
-            $expiry = isset($info['expiry']) ? \WHMCS\Carbon::parse($info['expiry']) : null;
-            $status = $expiry && $expiry->isPast() ? 'Expired' : 'Active';
-            if (array_intersect(['clientHold', 'serverHold'], $statuses)) { $status = 'Suspended'; }
+            $statuses = Lifecycle::codes($info);
+            $expiry = \WHMCS\Carbon::createFromTimestampUTC(Lifecycle::expiry($info));
+            $status = Lifecycle::registrationStatus($info);
             return (new \WHMCS\Domain\Registrar\Domain())->setDomain($name)->setNameservers($nameservers)
                 ->setExpiryDate($expiry)->setRegistrationStatus($status)
-                ->setTransferLock(in_array('clientTransferProhibited', $statuses, true));
-        } catch (\Throwable $e) { return ['error' => $e->getMessage()]; }
+                ->setRestorable((bool) array_intersect(['redemptionPeriod', 'pendingRestore'], $statuses))
+                ->setTransferLock((bool) array_intersect(['clientTransferProhibited', 'serverTransferProhibited'], $statuses));
+        } catch (\Throwable $e) { throw new \RuntimeException($e->getMessage(), 0, $e); }
     }

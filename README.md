@@ -1,6 +1,6 @@
 # Gateway SRS registrar module for WHMCS
 
-Gateway SRS integrates domain registration, renewal, transfer, contacts, nameservers and pricing with WHMCS. Version 4.1 adds portal-issued JWT authentication, expiry monitoring, release notifications and signed admin updates.
+Gateway SRS integrates domain registration, renewal, transfer, contacts, nameservers and pricing with WHMCS. Version 4.2 adds lifecycle and premium-price safeguards, DNSSEC self-service, and account balance monitoring alongside JWT authentication and signed admin updates.
 
 ## Requirements and installation
 
@@ -11,7 +11,7 @@ Download the latest stable `gateway_srs.zip` from [GitHub Releases](https://gith
 - `modules/registrars/gateway_srs/`
 - `modules/addons/gateway_srs_manager/`
 
-The first installation of this updater must be manual. Keep the administrator directory name configured in WHMCS; the module uses relative admin links and does not assume it is named `admin`.
+Install **both directories manually for 4.2**, including when upgrading from 4.1. The new balance and DNSSEC manager pages require companion version 1.1.0 (manager API 2); the 4.1 updater refuses this incompatible manager requirement. Future registrar-only updates preserve this recovery bootstrap. Keep the administrator directory name configured in WHMCS; the module uses relative admin links and does not assume it is named `admin`.
 
 Activate Gateway SRS under **Configuration → System Settings → Domain Registrars**. Activate **Gateway SRS Manager** under **Addon Modules**, granting access only to the appropriate administrator roles. The manager also requires the **Configure Domain Registrars** permission, including for update and recovery POST actions.
 
@@ -48,6 +48,34 @@ Checks use thresholds, so a missed cron run still detects the current severity. 
 
 The manager shows installed/latest versions, release notes and the last successful release check. **Check now** refreshes status. Release-service failure preserves the last known release and does not interrupt registrar operations.
 
+## Account balance and low-funds alerts
+
+The manager shows **account balance**, **credit limit**, **available credit**, account currency and the last successful check. Available credit includes the credit facility. Monitoring works with both password and JWT authentication and needs access to the portal billing balances endpoint.
+
+In the registrar configuration, enable **Low-funds alerts**, enter the account's three-letter **Balance alert currency**, and choose **Low available credit** and **Critical available credit**. The low threshold must be greater than the critical threshold. For example, ZAR 1000 low and ZAR 100 critical. Thresholds are inclusive. Alerts default to disabled until these settings are chosen; balance visibility remains available.
+
+Daily cron and **Check now** fetch balances. Administrators receive a low warning, an urgent critical warning on escalation, and a recovery email once available credit rises above the low threshold. Each severity is sent once per incident; successful recovery resets the incident. Failed email delivery is retried. Recipients need WHMCS system emails enabled. No balance or funding information is shown to clients.
+
+Snapshots and email history are scoped to the selected environment and credentials. A failed API request preserves the last successful balance with an explicit error, without treating it as zero or sending a recovery email. Snapshots older than two days are marked out of date. A currency mismatch raises a configuration notice instead of comparing amounts in different currencies. These settings do not change the portal's separate balance-threshold notification policy.
+
+## DNSSEC self-service
+
+Clients can choose **DNSSEC** in their domain actions or **Manage DNSSEC** on the domain overview. Administrators can use **Manage DNSSEC records** in the client's domain tab, which opens the manager for that domain. The companion addon must be activated and its administrator role access granted.
+
+The page lists DS records and allows adding or removing individual records, including the last DS record. Use the key tag, signing algorithm, digest type and digest supplied by the DNS hosting provider. New records support algorithms 8, 10, 13, 14, 15 and 16 with SHA-256 or SHA-384 digests; the target registry may support a smaller subset. Existing legacy DS records remain visible and removable. This manages delegation records; it does not sign the hosted DNS zone or generate DNS keys.
+
+Incorrect DS records can make a domain unreachable. Follow the DNS provider's key rollover procedure and retain old records until it is safe to remove them. Removing the last DS record disables the chain of trust. Changes are protected by session tokens, WHMCS domain-management permissions, current domain ownership checks, record revisions and a local per-domain lock. The module preserves nameservers, glue, contacts and autorenew settings, then reads back the DS list to confirm the result. It does not rotate the EPP code. Unsupported operations, stale forms and unconfirmed writes are reported explicitly.
+
+The API does not provide an atomic conditional update for external portal changes. Avoid editing the same domain simultaneously in the portal and WHMCS. After a timeout or an unconfirmed result, reload and inspect the current DS list before retrying.
+
+## Lifecycle synchronization and premium prices
+
+Enable the WHMCS domain synchronization cron. Sync reads EPP and redemption statuses with UTC expiry dates. Holds, pending transfers and deletion/redemption states do not reactivate solely because a future expiry is present. WHMCS's Sync interface has no separate hold/redemption flag; detailed hold and restorable state is returned through Domain Information. A missing domain or API error does not prove transfer-out: the module requires a positive change of sponsoring registrar. Incoming transfers use explicit query outcomes and current ownership before completion; rejected and cancelled requests return a failure reason, while unknown outcomes remain unchanged.
+
+Before selling premium domains, set **Premium cost currency** to the ISO currency used for saved WHMCS premium costs, for example ZAR. Keep that currency present in WHMCS and refresh saved quotes before changing currency. Registration, renewal and transfer obtain a fresh quote and stop if approval is missing, premiums are disabled, costs/currencies disagree, or the response is ambiguous. Checks happen before registration contacts are created. Supported fee/charge agreements accompany the purchase so the registry can enforce the quoted price.
+
+The current API contract only provides a verifiable one-year premium quote, so longer premium terms are blocked. Its renewal and transfer EPP builders support fee agreements, not charge agreements: **charge-only premium renewals and transfers are blocked** until the API supplies a fee quote or adds enforceable charge support. Registration supports either extension. Standard domains without pricing extensions retain normal EPP behavior. These safeguards do not automatically reprice or approve a customer's order.
+
 ## Admin updates and recovery
 
 The **Install latest stable release** button appears for a newer compatible release with all signed assets. Installation independently retrieves fresh release metadata and verifies the publisher signature, ZIP checksum and every file checksum. It rejects unexpected paths, symlinks, duplicate names, oversized archives and runtime/manager incompatibility. Unsigned older releases remain available through the manual download link.
@@ -60,7 +88,7 @@ The registrar's parent directory must be writable by the PHP worker for admin up
 
 ## Private state directory
 
-Monitoring stores only token fingerprints, expiry metadata, notification history and release metadata. API tokens and portal passwords are never stored in this directory. The default is a private, per-installation directory under the system temporary directory, owned by the PHP user with permissions 0700.
+Monitoring stores token fingerprints, expiry metadata, balance snapshots, notification history and release metadata. API tokens and portal passwords are never stored in this directory. The default is a private, per-installation directory under the system temporary directory, owned by the PHP user with permissions 0700.
 
 For durable notification history and recovery across restarts, configure a persistent directory **outside the web root** in WHMCS `configuration.php`:
 

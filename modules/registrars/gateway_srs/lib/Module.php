@@ -48,7 +48,25 @@ final class Module
                 . '<br>Portal token reroll invalidates the old token immediately. Update every installation using that token.';
             $result = localAPI('SendAdminEmail', ['customsubject' => $subject, 'custommessage' => $body, 'type' => 'system']);
             return ($result['result'] ?? '') === 'success';
-        });
+        }, self::balanceMonitor());
+    }
+
+    public static function balanceMonitor(): BalanceMonitor
+    {
+        return new BalanceMonitor(new RuntimeState(), static fn (array $settings) => self::api($settings)->balances(),
+            static function (array $status, string $environment): bool {
+                $recovered = !empty($status['recovered']);
+                $subject = ($status['level'] === 'critical' ? 'URGENT: ' : '') . 'Gateway SRS funds: '
+                    . ($recovered ? 'recovered' : $status['level']) . ' (' . strtoupper($environment) . ')';
+                $body = self::escape($status['message']);
+                if (isset($status['available'])) {
+                    $body .= '<br>Available credit: ' . self::escape($status['available'] . ' ' . $status['currency'])
+                        . '. Checked ' . gmdate('Y-m-d H:i:s', $status['checked_at']) . ' UTC.';
+                }
+                $body .= '<br>Open Gateway SRS Manager to check the account balance. Alert thresholds are configured under Domain Registrars &gt; Gateway SRS.';
+                $result = localAPI('SendAdminEmail', ['customsubject' => $subject, 'custommessage' => $body, 'type' => 'system']);
+                return ($result['result'] ?? '') === 'success';
+            });
     }
 
     public static function escape($text): string
@@ -66,6 +84,14 @@ final class Module
             if (!$settings) { return ''; }
             $status = self::monitor()->tokenStatus($settings);
             $html = '';
+            $balance = self::balanceMonitor()->status($settings);
+            if (in_array($balance['level'], ['low', 'critical', 'configuration'], true) || !empty($balance['error']) || !empty($balance['stale'])) {
+                $html .= '<div class="alert alert-' . ($balance['level'] === 'critical' ? 'danger' : 'warning')
+                    . '"><strong>Gateway SRS funds:</strong> ' . self::escape($balance['message'])
+                    . (!empty($balance['error']) ? ' ' . self::escape($balance['error']) : '')
+                    . (!empty($balance['stale']) ? ' The balance is out of date. Run Check now and verify the daily cron.' : '')
+                    . ' <a href="addonmodules.php?module=gateway_srs_manager">View account balance</a>.</div>';
+            }
             if ($status && $status['level'] !== 'healthy') {
                 $class = $status['level'] === 'warning' ? 'warning' : 'danger';
                 $html .= '<div class="alert alert-' . $class . '"><strong>Gateway SRS:</strong> ' . self::escape($status['message']);

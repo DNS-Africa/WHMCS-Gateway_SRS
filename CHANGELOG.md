@@ -1,5 +1,18 @@
 # Changelog
 
+## 4.2.0 — 2026-11-06
+
+- Synchronize domain lifecycle from EPP and redemption statuses; holds, pending transfers and deletion states no longer reactivate solely because expiry is in the future.
+- Require positive sponsoring-registrar evidence before marking a domain transferred away. Poll explicit incoming transfer outcomes and report approved, rejected and cancelled transfers with current ownership checks.
+- Return the WHMCS Domain information object with hold, redemption and server-lock state; throw on information errors as required by WHMCS.
+- Recheck premium prices before registration, renewal and transfer. Compare exact decimal costs and configured currency, support fee and charge quotes, reject conflicting or missing quotes, and send supported EPP price agreements.
+- Block premium terms beyond the API's verifiable one-year quote and charge-only premium renewals/transfers where the current API cannot enforce the agreement.
+- Add client and administrator DNSSEC DS record management, modern digest validation, domain ownership/permission checks, CSRF protection, stale-form rejection, preservation of unrelated settings and read-back confirmation.
+- Show account balance, credit limit, available credit, currency and freshness in Gateway SRS Manager. Add configurable low/critical available-credit alerts, administrator notices, email retries, escalation, recovery and deduplication for both authentication modes.
+- Keep balance snapshots and alert history isolated by environment and credentials. Preserve stale values on API failure without inventing zero balances or recovery.
+- Add manager API 2 and companion version 1.1.0. Install both module directories manually when upgrading from 4.1; future registrar updates continue to preserve the manager bootstrap.
+- Expand offline regression coverage and opt-in read-only API checks. Authenticated OTE and real WHMCS acceptance remain deployment checks.
+
 ## 4.1.0 — 2026-11-06
 
 - Add explicit portal-password and portal-issued JWT authentication, with encrypted WHMCS settings and API validation.

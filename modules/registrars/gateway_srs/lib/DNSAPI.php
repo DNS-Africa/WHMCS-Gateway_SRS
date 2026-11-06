@@ -531,7 +531,7 @@ class DNSAPI
          * @return mixed
          * @throws RestAPIException
          */
-        public function domain_info($domain)
+        public function registry_domain_info(string $domain): array
         {
             $url = $this->registry_api_url . 'registry/domains/info/';
             $result = $this->postCH($url, array("name" => $domain));
@@ -543,10 +543,38 @@ class DNSAPI
             if (!is_array($info) || !$info) {
                 throw new RestAPIException('Gateway SRS returned no domain information.');
             }
+            return $info;
+        }
+
+        public function registrarId(): string { return $this->epp_username; }
+
+        public function domain_info($domain)
+        {
+            $info = $this->registry_domain_info($domain);
             if (isset($info['rar']) && $this->epp_username !== $info['rar']) {
                 throw new RestAPIException('This domain is managed by another registrar.');
             }
             return $info;
+        }
+
+        public function transfer_query(string $name): array
+        {
+            // Collection action works before an incoming domain belongs to this registrar.
+            return $this->postCH($this->registry_api_url . 'registry/domains/transfer-query/', ['name' => $name]);
+        }
+
+        public function balances(): array
+        {
+            return $this->getCH($this->portal_api_url . 'billing/balances/');
+        }
+
+        public function dnssec(string $name): array
+        {
+            $response = $this->getCH($this->registry_api_url . 'registry/WHMCS/domains/' . rawurlencode($name) . '/dnssec/');
+            if (!isset($response['domainsec']) || !is_array($response['domainsec'])) {
+                throw new RestAPIException('Gateway SRS returned no valid DNSSEC record list.');
+            }
+            return $response['domainsec'];
         }
 
         /*

@@ -7,13 +7,15 @@ final class Monitor
     private ReleaseClient $releases;
     private $verify;
     private $notify;
+    private ?BalanceMonitor $balance;
 
-    public function __construct(RuntimeState $state, ReleaseClient $releases, callable $verify, callable $notify)
+    public function __construct(RuntimeState $state, ReleaseClient $releases, callable $verify, callable $notify, ?BalanceMonitor $balance = null)
     {
         $this->state = $state;
         $this->releases = $releases;
         $this->verify = $verify;
         $this->notify = $notify;
+        $this->balance = $balance;
     }
 
     public function run(array $settings): void
@@ -49,6 +51,10 @@ final class Monitor
                         $this->state->write('notifications-' . $environment, $sent);
                     }
                 }
+            }
+            if ($this->balance) {
+                try { $this->balance->run($settings); }
+                catch (\Throwable $e) { SafeLog::write('Balance monitoring failed', ['event' => 'balance_error']); }
             }
             $this->checkRelease();
         } finally {
