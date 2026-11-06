@@ -3,6 +3,9 @@ namespace WHMCS\Module\Registrar\gateway_srs;
 
 final class Module
 {
+    /** Gateway SRS accounts, balances and premium quotes operate in USD; operators are not asked for a currency. */
+    public const CURRENCY = 'USD';
+
     private static $apiFactory;
 
     public static function api(array $params): DNSAPI
@@ -12,6 +15,19 @@ final class Module
 
     /** Dependency injection for consumers and offline integration tests; never set from request parameters. */
     public static function setApiFactory(?callable $factory): void { self::$apiFactory = $factory; }
+
+    private static $redirector;
+
+    /** Test seam for redirects; never set from request parameters. */
+    public static function setRedirector(?callable $redirector): void { self::$redirector = $redirector; }
+
+    /** Send the browser to a relative client-area URL and end the request (303 so a refresh cannot re-POST). */
+    public static function redirect(string $url): void
+    {
+        if (self::$redirector) { (self::$redirector)($url); return; }
+        header('Location: ' . $url, true, 303);
+        exit;
+    }
 
     public static function version(): array
     {
@@ -69,6 +85,90 @@ final class Module
             });
     }
 
+    public static function registryWatch(): RegistryWatch
+    {
+        return new RegistryWatch(new RuntimeState(), static function (array $ids): array {
+            $rows = [];
+            foreach (\WHMCS\Database\Capsule::table('tbldomains')->whereIn('id', $ids)->get(['id', 'domain', 'userid', 'status', 'registrar']) as $row) {
+                $rows[(int) $row->id] = ['domain' => (string) $row->domain, 'userid' => (int) $row->userid,
+                    'status' => (string) $row->status, 'registrar' => (string) $row->registrar];
+            }
+            return $rows;
+        });
+    }
+
+    /** Best-effort: recording a registry 404 must never change the result of the registrar call that found it. */
+    public static function registryMissing(array $params, string $domain): void
+    {
+        try { self::registryWatch()->missing($params, $domain, (int) ($params['domainid'] ?? 0)); }
+        catch (\Throwable $e) { SafeLog::write('Registry watch unavailable', ['event' => 'registry_watch_error']); }
+    }
+
+    public static function registryFound(array $params, string $domain): void
+    {
+        try { self::registryWatch()->found($params, $domain); }
+        catch (\Throwable $e) { SafeLog::write('Registry watch unavailable', ['event' => 'registry_watch_error']); }
+    }
+
+    public static function registryMissingFor(array $settings, string $domain): ?array
+    {
+        try { return self::registryWatch()->isMissing($settings, $domain); }
+        catch (\Throwable $e) { return null; }
+    }
+
+    /** Daily cron: one digest email of domains newly reported missing by the registry. */
+    public static function notifyRegistryMissing(array $settings): int
+    {
+        return self::registryWatch()->notify($settings, static function (array $entries, string $environment, int $total): bool {
+            [$subject, $body] = self::registryDigest($entries, $environment, $total);
+            $result = localAPI('SendAdminEmail', ['customsubject' => $subject, 'custommessage' => $body, 'type' => 'system']);
+            return ($result['result'] ?? '') === 'success';
+        });
+    }
+
+    /** @return array{0: string, 1: string} Subject and HTML body of the registry-404 digest. */
+    public static function registryDigest(array $entries, string $environment, int $total): array
+    {
+        $count = count($entries);
+        $plural = $count !== 1;
+        $subject = 'Gateway SRS: ' . $count . ' domain' . ($plural ? 's' : '') . ' not found at the registry (' . strtoupper($environment) . ')';
+        $body = 'The Gateway SRS API returned HTTP 404 (no domain record available to this account) in the '
+            . self::escape(RegistryWatch::label($environment)) . ' environment for ' . ($plural ? 'these domains' : 'this domain')
+            . '. Clients cannot manage ' . ($plural ? 'them' : 'it') . ' until this is resolved.<br><br>'
+            . '<table border="1" cellpadding="4" cellspacing="0"><tr><th>Domain</th><th>WHMCS domain ID</th><th>Client ID</th><th>First seen (UTC)</th></tr>';
+        foreach (array_slice($entries, 0, RegistryWatch::DIGEST_LIMIT) as $entry) {
+            $body .= '<tr><td>' . self::escape($entry['domain']) . '</td><td>' . ((int) ($entry['domain_id'] ?? 0) ?: '-') . '</td><td>'
+                . ((int) ($entry['userid'] ?? 0) ?: '-') . '</td><td>' . gmdate('Y-m-d H:i', (int) ($entry['first_seen'] ?? 0)) . '</td></tr>';
+        }
+        $body .= '</table>';
+        if ($count > RegistryWatch::DIGEST_LIMIT) { $body .= '<br>And ' . ($count - RegistryWatch::DIGEST_LIMIT) . ' more.'; }
+        $earlier = $total - $count;
+        if ($earlier > 0) { $body .= '<br>' . $earlier . ' previously reported domain' . ($earlier === 1 ? ' is' : 's are') . ' still missing.'; }
+        $body .= '<br><br>Likely causes: Account Mode is set to the wrong environment; the domain is not on this registrar account'
+            . ' in the Gateway SRS portal; or the domain was transferred out or deleted.'
+            . '<br>You will not be emailed about these domains again unless the registry finds them and they go missing again.';
+        return [$subject, $body];
+    }
+
+    public static function registryNotice(array $settings): string
+    {
+        try { $entries = self::registryWatch()->entries($settings); }
+        catch (\Throwable $e) { SafeLog::write('Registry watch unavailable', ['event' => 'registry_watch_error']); return ''; }
+        if (!$entries) { return ''; }
+        $count = count($entries);
+        $links = [];
+        foreach (array_slice($entries, 0, 5) as $entry) {
+            $name = self::escape($entry['domain']);
+            $links[] = !empty($entry['domain_id']) && !empty($entry['userid'])
+                ? '<a href="clientsdomains.php?userid=' . (int) $entry['userid'] . '&amp;id=' . (int) $entry['domain_id'] . '">' . $name . '</a>'
+                : $name;
+        }
+        return '<div class="alert alert-warning"><strong>Gateway SRS:</strong> ' . $count . ' domain' . ($count === 1 ? ' was' : 's were')
+            . ' not found at the registry in the ' . self::escape(RegistryWatch::label(RegistryWatch::environment($settings)))
+            . ' environment: ' . implode(', ', $links) . ($count > 5 ? ' and ' . ($count - 5) . ' more' : '')
+            . '. Clients cannot manage ' . ($count === 1 ? 'it' : 'them') . '. Check Account Mode and the registrar assignment in the Gateway SRS portal.</div>';
+    }
+
     public static function escape($text): string
     {
         return htmlspecialchars((string) $text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
@@ -100,6 +200,7 @@ final class Module
                 }
                 $html .= '</div>';
             }
+            $html .= self::registryNotice($settings);
             $release = (new RuntimeState())->read('release');
             if (!empty($release['version']) && version_compare($release['version'], self::version()['version'], '>')) {
                 $html .= '<div class="alert alert-info">Gateway SRS ' . self::escape($release['version'])

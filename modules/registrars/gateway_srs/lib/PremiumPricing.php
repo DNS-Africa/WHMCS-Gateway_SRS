@@ -93,9 +93,9 @@ final class PremiumPricing
         if ((int) ($params['regperiod'] ?? 0) !== 1) {
             throw new \RuntimeException('Premium operations require a one-year term because the API quotes one year.');
         }
-        $currency = strtoupper(trim($params['Premium_Currency'] ?? ''));
-        if ($currency === '' || Amount::currency($currency) !== $quote['currency']) {
-            throw new \RuntimeException('The configured premium cost currency does not match the current registry quote; purchase stopped.');
+        if ($quote['currency'] !== Module::CURRENCY) {
+            throw new \RuntimeException('The registry quoted this premium price in ' . $quote['currency'] . ', but this module operates in '
+                . Module::CURRENCY . '; purchase stopped.');
         }
         if (Amount::units($params['premiumCost']) !== Amount::units($quote['price'])) {
             throw new \RuntimeException('The premium cost has changed. Refresh and approve the WHMCS price before retrying.');

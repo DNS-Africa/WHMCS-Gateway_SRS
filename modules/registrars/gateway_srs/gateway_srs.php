@@ -23,7 +23,7 @@
 
     require_once __DIR__ . '/lib/bootstrap.php';
 
-    use \WHMCS\Module\Registrar\gateway_srs\{Module, PremiumPricing, Lifecycle, DnssecPage};
+    use \WHMCS\Module\Registrar\gateway_srs\{Module, PremiumPricing, Lifecycle, DnssecPage, RegistryWatch};
     use \WHMCS\Module\Registrar\gateway_srs\RuntimeState;
     use \WHMCS\Module\Registrar\gateway_srs\RestAPIException;
 
@@ -131,25 +131,17 @@
                 'Type' => 'yesno',
                 'Description' => 'Log HTTP metadata only. Credentials and API bodies are never logged.',
             ],
-            'Premium_Currency' => [
-                'FriendlyName' => 'Premium cost currency', 'Type' => 'text', 'Size' => '5', 'Default' => '',
-                'Description' => 'ISO currency of saved WHMCS premium costs, e.g. ZAR. Required before premium purchases; must match current quotes.'
-            ],
             'Balance_Alerts' => [
                 'FriendlyName' => 'Low-funds alerts', 'Type' => 'yesno',
                 'Description' => 'Email system administrators when available credit reaches the thresholds below. Balance remains visible with alerts disabled.'
             ],
-            'Balance_Currency' => [
-                'FriendlyName' => 'Balance alert currency', 'Type' => 'text', 'Size' => '5', 'Default' => '',
-                'Description' => 'Account ISO currency, e.g. ZAR. Must match the portal account.'
-            ],
             'Balance_Low' => [
                 'FriendlyName' => 'Low available credit', 'Type' => 'text', 'Size' => '15', 'Default' => '1000',
-                'Description' => 'Warn at or below this amount in the alert currency.'
+                'Description' => 'USD. Warn at or below this amount of available credit.'
             ],
             'Balance_Critical' => [
                 'FriendlyName' => 'Critical available credit', 'Type' => 'text', 'Size' => '15', 'Default' => '0',
-                'Description' => 'Send an urgent alert at or below this amount. Must be lower than the low threshold.'
+                'Description' => 'USD. Send an urgent alert at or below this amount. Must be lower than the low threshold.'
             ],
         ];
     }
@@ -161,9 +153,6 @@
     {
         try {
             \WHMCS\Module\Registrar\gateway_srs\BalanceMonitor::thresholds($params);
-            if (trim($params['Premium_Currency'] ?? '') !== '') {
-                \WHMCS\Module\Registrar\gateway_srs\Amount::currency(strtoupper(trim($params['Premium_Currency'])));
-            }
             Module::api($params)->validateConnection();
         } catch (\Throwable $e) {
             throw new InvalidConfiguration($e->getMessage());
@@ -574,56 +563,42 @@
     function gateway_srs_GetContactDetails($params)
     {
         try {
-            // Domain parameters
-            $sld = $params['sld'];
-            $tld = ltrim($params['tld'], '.');
-            $domain = $sld . '.' . $tld;
-
-            // Connect To API
+            $domain = $params['sld'] . '.' . ltrim($params['tld'], '.');
             $api = Module::api($params);
-
-
-            // Grab Domain Info
-            $domain_list = $api->list_domains($domain);
+            // One call: the domain view already nests each full contact (address, email, phone, fax), identical to
+            // registry/contacts/<id>/. Previously this page made an unused list call plus one call per contact role.
             $domain_view = $api->view_domain($domain);
-
-            // Contacts Section
+            $fetched = [];
             $contacts = [];
-            foreach ($domain_view['contacts'] as $contact) {
-                // Grab Contact Info
-                $contact_info = $api->contact_info($contact['contact']['id']);
-
-                // Grab Contact Name And Divide It
-                $name_parts = explode(
-                    ' ',
-                    $contact_info['contact_address'][0]['real_name']
-                );
+            foreach ($domain_view['contacts'] ?? [] as $contact) {
+                $contact_info = $contact['contact'] ?? [];
+                if (!isset($contact_info['contact_address'][0])) {
+                    // Defensive fallback if a response ever omits the nested address; each contact is fetched once.
+                    $id = (string) ($contact_info['id'] ?? '');
+                    $contact_info = $fetched[$id] ??= $api->contact_info($id);
+                }
+                $address = $contact_info['contact_address'][0];
+                $name_parts = explode(' ', (string) $address['real_name']);
                 $last_name = end($name_parts);
                 array_pop($name_parts);
-                $first_name = implode(' ', $name_parts);
-
-                // Build Contact ID
                 $contacts[ucfirst($contact['type'])] = [
-                    'First Name' => $first_name,
+                    'First Name' => implode(' ', $name_parts),
                     'Last Name' => $last_name,
-                    'Company Name' => $contact_info['contact_address'][0]['org'],
+                    'Company Name' => $address['org'],
                     'Email Address' => $contact_info['email'],
-                    'Address 1' => $contact_info['contact_address'][0]['street'],
-                    'Address 2' => $contact_info['contact_address'][0]['street2'],
-                    'City' => $contact_info['contact_address'][0]['city'],
-                    'State' => $contact_info['contact_address'][0]['province'],
-                    'Postcode' => $contact_info['contact_address'][0]['code'],
-                    'Country' => $contact_info['contact_address'][0]['country'],
+                    'Address 1' => $address['street'],
+                    'Address 2' => $address['street2'],
+                    'City' => $address['city'],
+                    'State' => $address['province'],
+                    'Postcode' => $address['code'],
+                    'Country' => $address['country'],
                     'Phone Number' => $contact_info['phone'],
-                    'Fax Number' => $contact_info['fax']
+                    'Fax Number' => $contact_info['fax'],
                 ];
             }
             return $contacts;
-
         } catch (\Exception $e) {
-            return [
-                'error' => $e->getMessage()
-            ];
+            return ['error' => $e->getMessage()];
         }
     }
 
@@ -849,33 +824,72 @@
     function gateway_srs_GetEPPCode($params)
     {
         try {
-            // Domain parameters
-            $sld = $params['sld'];
             $tld = ltrim($params['tld'], '.');
-            $domain = $sld . '.' . $tld;
-
-            if (
-                $tld != 'co.za' &&
-                $tld != 'net.za' &&
-                $tld != 'org.za' &&
-                $tld != 'web.za'
-            ) {
-                $dnsapi = Module::api($params);
-                // Call api
-                $values["eppcode"] = $dnsapi->domain_info($domain)["authinfo"];
-
-                return $values;
-            } else {
-                return [
-                    'error' => 'This TLD Does Not Support EPP Codes'
-                ];
+            $domain = $params['sld'] . '.' . $tld;
+            if (in_array($tld, ['co.za', 'net.za', 'org.za', 'web.za'], true)) {
+                return ['error' => 'This TLD Does Not Support EPP Codes'];
             }
-
+            $api = Module::api($params);
+            // The domain view returns the current auth code in ~0.2 s. The live registry info query returned the
+            // same code but took ~5.3 s on OTE, so it is only a fallback when no stored code is available.
+            $view = $api->view_domain($domain);
+            if (isset($view['rar']) && $view['rar'] !== $api->registrarId()) {
+                return ['error' => 'This domain is managed by another registrar.'];
+            }
+            $code = $view['authinfo'] ?? '';
+            if (!is_string($code) || $code === '') {
+                $code = $api->domain_info($domain)['authinfo'] ?? '';
+            }
+            if (!is_string($code) || $code === '') {
+                return ['error' => 'The registry did not return an EPP code for this domain. Please contact support.'];
+            }
+            return ['eppcode' => $code];
         } catch (\Exception $e) {
-            return [
-                'error' => $e->getMessage()
-            ];
+            return ['error' => $e->getMessage()];
         }
+    }
+
+    /** Client-area actions that are not sidebar buttons. NewEPPCode is posted from the Auth Code page. */
+    function gateway_srs_ClientAreaAllowedFunctions()
+    {
+        return ['New EPP Code' => 'NewEPPCode'];
+    }
+
+    /**
+     * Generate and set a new auth (EPP) code, then return to the Auth Code page, which shows the stored code.
+     * WHMCS has already checked the CSRF token, the client's ownership of the domain and managedomains permission.
+     * registry-api validates a PATCH as a full domain (hosts, contacts, period and period_unit are required) but
+     * sends the registry only the keys that differ from its stored copy. Resending the current values unchanged
+     * therefore changes only the auth code; DNSSEC (not sent) is untouched.
+     */
+    function gateway_srs_NewEPPCode($params)
+    {
+        $back = 'clientarea.php?action=domaingetepp&domainid=' . (int) ($params['domainid'] ?? 0) . '&eppcode=';
+        $result = 'failed';
+        try {
+            $tld = ltrim($params['tld'], '.');
+            $domain = $params['sld'] . '.' . $tld;
+            if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST' || in_array($tld, ['co.za', 'net.za', 'org.za', 'web.za'], true)) {
+                throw new \RuntimeException('A new EPP code can only be requested from the Auth Code page.');
+            }
+            $api = Module::api($params);
+            $view = $api->view_domain($domain);
+            if (isset($view['rar']) && $view['rar'] !== $api->registrarId()) {
+                throw new \RuntimeException('This domain is managed by another registrar.');
+            }
+            if (!isset($view['hosts'], $view['contacts']) || !is_array($view['hosts']) || !is_array($view['contacts'])) {
+                throw new \RuntimeException('Gateway SRS returned incomplete domain settings.');
+            }
+            $api->update_domain(['name' => $domain,
+                'authinfo' => \WHMCS\Module\Registrar\gateway_srs\DNSAPI::generate_password($domain),
+                'hosts' => $view['hosts'], 'contacts' => $view['contacts'],
+                'period' => $view['period'] ?? 1, 'period_unit' => $view['period_unit'] ?? 'y'], $domain);
+            $result = 'new';
+        } catch (\Throwable $e) {
+            \WHMCS\Module\Registrar\gateway_srs\SafeLog::write('New EPP code failed', ['event' => 'eppcode_error']);
+        }
+        Module::redirect($back . $result);
+        return $result;
     }
 
     # Request deletion of the domain name
@@ -1102,7 +1116,10 @@
     {
         try {
             $domain = $params['sld'] . '.' . ltrim($params['tld'], '.');
-            return Lifecycle::sync(Module::api($params), $domain);
+            $result = Lifecycle::sync(Module::api($params), $domain,
+                static function () use ($params, $domain) { Module::registryMissing($params, $domain); });
+            Module::registryFound($params, $domain);
+            return $result;
         } catch (\Throwable $e) {
             // A 404 or an authentication failure is not evidence that the domain transferred away.
             return ['error' => $e->getMessage()];
@@ -1556,22 +1573,40 @@
 
     function gateway_srs_ClientArea($params)
     {
-        return '<p><a class="btn btn-default" href="clientarea.php?action=domaindetails&amp;domainid='
-            . (int) ($params['domainid'] ?? 0) . '&amp;modop=custom&amp;a=DNSSEC">Manage DNSSEC</a></p>';
+        return '<p><a class="btn btn-default" href="' . Module::escape(DnssecPage::link((int) ($params['domainid'] ?? 0)))
+            . '">Manage DNSSEC</a></p>';
     }
 
-    function gateway_srs_AdminClientDomainsTabFields($params)
+    // WHMCS calls <registrar>_AdminDomainsTabFields; "AdminClientDomainsTabFields" is only a hook point name.
+    function gateway_srs_AdminDomainsTabFields($params)
     {
         if (!Module::canManage()) { return []; }
-        return ['DNSSEC' => '<a href="addonmodules.php?module=gateway_srs_manager&amp;domainid='
+        $fields = ['DNSSEC' => '<a href="addonmodules.php?module=gateway_srs_manager&amp;domainid='
             . (int) ($params['domainid'] ?? 0) . '">Manage DNSSEC records</a>'];
+        // These params carry only the domain, not the module settings that select the account environment.
+        $settings = Module::settings();
+        $missing = $settings ? Module::registryMissingFor($settings, ($params['sld'] ?? '') . '.' . ltrim($params['tld'] ?? '', '.')) : null;
+        if ($missing) {
+            $fields['Registry status'] = '<span class="label label-danger">Not found at the registry</span> since '
+                . gmdate('Y-m-d H:i', (int) $missing['first_seen']) . ' UTC ('
+                . Module::escape(RegistryWatch::label(RegistryWatch::environment($settings)))
+                . ' environment). The Gateway SRS API returned HTTP 404, so clients cannot manage this domain.'
+                . ' Check Account Mode and the domain\'s registrar assignment in the Gateway SRS portal.';
+        }
+        return $fields;
     }
 
     function gateway_srs_GetDomainInformation($params)
     {
         try {
             $name = $params['sld'] . '.' . ltrim($params['tld'], '.');
-            $info = Module::api($params)->view_domain($name);
+            try {
+                $info = Module::api($params)->view_domain($name);
+            } catch (RestAPIException $e) {
+                if ($e->getCode() === 404) { Module::registryMissing($params, $name); }
+                throw $e;
+            }
+            Module::registryFound($params, $name);
             $nameservers = [];
             foreach ($info['hosts'] ?? $info['nameservers'] ?? [] as $host) {
                 $nameservers['ns' . (count($nameservers) + 1)] = is_array($host) ? $host['hostname'] : $host;

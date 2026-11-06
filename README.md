@@ -54,7 +54,7 @@ The manager shows installed/latest versions, release notes and the last successf
 
 The manager shows **account balance**, **credit limit**, **available credit**, account currency and the last successful check. Available credit includes the credit facility. Monitoring works with both password and JWT authentication and needs access to the portal billing balances endpoint.
 
-In the registrar configuration, enable **Low-funds alerts**, enter the account's three-letter **Balance alert currency**, and choose **Low available credit** and **Critical available credit**. The low threshold must be greater than the critical threshold. For example, ZAR 1000 low and ZAR 100 critical. Thresholds are inclusive. Alerts default to disabled until these settings are chosen; balance visibility remains available.
+The module operates in **USD**; there is no currency setting. In the registrar configuration, enable **Low-funds alerts** and choose **Low available credit** and **Critical available credit** in USD. The low threshold must be greater than the critical threshold. For example, USD 1000 low and USD 100 critical. If the account ever reports a balance in another currency, the manager shows a configuration alert instead of comparing it against USD thresholds. Thresholds are inclusive. Alerts default to disabled until these settings are chosen; balance visibility remains available.
 
 Daily cron and **Check now** fetch balances. Administrators receive a low warning, an urgent critical warning on escalation, and a recovery email once available credit rises above the low threshold. Each severity is sent once per incident; successful recovery resets the incident. Failed email delivery is retried. Recipients need WHMCS system emails enabled. No balance or funding information is shown to clients.
 
@@ -66,15 +66,34 @@ Clients can choose **DNSSEC** in their domain actions or **Manage DNSSEC** on th
 
 The page lists DS records and allows adding or removing individual records, including the last DS record. Use the key tag, signing algorithm, digest type and digest supplied by the DNS hosting provider. New records support algorithms 8, 10, 13, 14, 15 and 16 with SHA-256 or SHA-384 digests; the target registry may support a smaller subset. Existing legacy DS records remain visible and removable. This manages delegation records; it does not sign the hosted DNS zone or generate DNS keys.
 
-Incorrect DS records can make a domain unreachable. Follow the DNS provider's key rollover procedure and retain old records until it is safe to remove them. Removing the last DS record disables the chain of trust. Changes are protected by session tokens, WHMCS domain-management permissions, current domain ownership checks, record revisions and a local per-domain lock. The module preserves nameservers, glue, contacts and autorenew settings, then reads back the DS list to confirm the result. It does not rotate the EPP code. Unsupported operations, stale forms and unconfirmed writes are reported explicitly.
+Incorrect DS records can make a domain unreachable. Follow the DNS provider's key rollover procedure and retain old records until it is safe to remove them. Removing the last DS record disables the chain of trust. Changes are protected by session tokens, WHMCS domain-management permissions, current domain ownership checks, record revisions and a local per-domain lock. The module preserves nameservers, glue, contacts and autorenew settings, then reads back the DS list to confirm the result. It does not rotate the EPP code (see **Auth Code** below). Unsupported operations, stale forms and unconfirmed writes are reported explicitly.
 
 The API does not provide an atomic conditional update for external portal changes. Avoid editing the same domain simultaneously in the portal and WHMCS. After a timeout or an unconfirmed result, reload and inspect the current DS list before retrying.
+
+## Auth Code (EPP code)
+
+The client **Auth Code** page shows the code stored with the domain, which is current and loads quickly. If no stored code is available the module asks the registry directly. .za SLDs (co.za, net.za, org.za, web.za) do not use EPP codes.
+
+Clients can replace the code with **Generate new code**. The module sets a new random code at the registry and returns to the Auth Code page with it; nameservers, contacts and DNSSEC are not changed. The old code stops working immediately, so a transfer already using it fails. The action accepts POST requests only and relies on WHMCS's CSRF token, domain ownership and domain-management permission checks.
+
+The button is not part of the stock WHMCS templates. The module's `ClientAreaPageDomainEPPCode` hook sets `$gatewaySrsNewEppCode` for eligible Gateway SRS domains; add a form like this to your client theme's `clientareadomaingetepp.tpl`, below the code (WHMCS adds the CSRF token to POST forms automatically):
+
+```smarty
+{if $gatewaySrsNewEppCode}
+    <form method="post" action="clientarea.php?action=domaindetails&amp;id={$gatewaySrsNewEppCode.domainid}&amp;modop=custom&amp;a=NewEPPCode"
+          onsubmit="return confirm('Generate a new auth code? The current code will stop working.');">
+        <button type="submit" class="btn btn-primary">Generate new code</button>
+    </form>
+{/if}
+{if $smarty.get.eppcode eq 'new'}<div class="alert alert-success">A new auth code has been generated.</div>{/if}
+{if $smarty.get.eppcode eq 'failed'}<div class="alert alert-danger">A new auth code could not be generated. Your current code is unchanged.</div>{/if}
+```
 
 ## Lifecycle synchronization and premium prices
 
 Enable the WHMCS domain synchronization cron. Sync reads EPP and redemption statuses with UTC expiry dates. Holds, pending transfers and deletion/redemption states do not reactivate solely because a future expiry is present. WHMCS's Sync interface has no separate hold/redemption flag; detailed hold and restorable state is returned through Domain Information. A missing domain or API error does not prove transfer-out: the module requires a positive change of sponsoring registrar. Incoming transfers use explicit query outcomes and current ownership before completion; rejected and cancelled requests return a failure reason, while unknown outcomes remain unchanged.
 
-Before selling premium domains, set **Premium cost currency** to the ISO currency used for saved WHMCS premium costs, for example ZAR. Keep that currency present in WHMCS and refresh saved quotes before changing currency. Registration, renewal and transfer obtain a fresh quote and stop if approval is missing, premiums are disabled, costs/currencies disagree, or the response is ambiguous. Checks happen before registration contacts are created. Supported fee/charge agreements accompany the purchase so the registry can enforce the quoted price.
+Premium costs are in **USD**, so keep USD present in WHMCS for saved premium costs; there is no premium currency setting. A quote in any other currency stops the purchase. Registration, renewal and transfer obtain a fresh quote and stop if approval is missing, premiums are disabled, costs/currencies disagree, or the response is ambiguous. Checks happen before registration contacts are created. Supported fee/charge agreements accompany the purchase so the registry can enforce the quoted price.
 
 The current API contract only provides a verifiable one-year premium quote, so longer premium terms are blocked. Its renewal and transfer EPP builders support fee agreements, not charge agreements: **charge-only premium renewals and transfers are blocked** until the API supplies a fee quote or adds enforceable charge support. Registration supports either extension. Standard domains without pricing extensions retain normal EPP behavior. These safeguards do not automatically reprice or approve a customer's order.
 

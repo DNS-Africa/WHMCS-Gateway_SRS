@@ -171,6 +171,15 @@ class DNSAPI
         return $decoded;
     }
 
+    /**
+     * JSON request body. An empty PHP array must go out as {} — json_encode([]) is "[]", a JSON list, and the
+     * registry API reads request.data as an object (lock/unlock/block/unblock returned HTTP 500 for "[]").
+     */
+    public static function encodeBody(array $data): string
+    {
+        return json_encode($data === [] ? new \stdClass() : $data, JSON_THROW_ON_ERROR);
+    }
+
     protected function send(string $method, string $url, ?array $data): array
     {
         if ($this->transport !== null) {
@@ -183,7 +192,7 @@ class DNSAPI
                 CURLOPT_CONNECTTIMEOUT => 20, CURLOPT_TIMEOUT => 60,
                 CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Accept: application/json', 'Authorization: Bearer ' . $this->bearer]]);
             if ($data !== null) {
-                curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data, JSON_THROW_ON_ERROR));
+                curl_setopt($ch, CURLOPT_POSTFIELDS, self::encodeBody($data));
             }
             $body = curl_exec($ch);
             if ($body === false) {

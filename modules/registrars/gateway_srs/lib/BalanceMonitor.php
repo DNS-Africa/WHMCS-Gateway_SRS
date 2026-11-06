@@ -26,7 +26,7 @@ final class BalanceMonitor
     public static function thresholds(array $settings): ?array
     {
         if (empty($settings['Balance_Alerts'])) { return null; }
-        $currency = Amount::currency(strtoupper(trim($settings['Balance_Currency'] ?? '')));
+        $currency = Module::CURRENCY;
         $low = Amount::text(trim($settings['Balance_Low'] ?? ''));
         $critical = Amount::text(trim($settings['Balance_Critical'] ?? '0'));
         if (Amount::units($low) <= Amount::units($critical)) {
@@ -56,7 +56,8 @@ final class BalanceMonitor
             $limits = self::thresholds($settings);
             if (!$limits) { $status['message'] = 'Low-funds email alerts are disabled.'; return $status; }
             if ($limits['currency'] !== $status['currency']) {
-                throw new \RuntimeException('The alert currency differs from the account currency. Update the registrar alert settings.');
+                throw new \RuntimeException('The Gateway SRS account reports its balance in ' . $status['currency']
+                    . ', but this module operates in ' . Module::CURRENCY . '. Contact Gateway SRS support.');
             }
             $available = Amount::units($status['available'], true);
             $status['level'] = $available <= Amount::units($limits['critical']) ? 'critical'

@@ -1,5 +1,36 @@
 # Changelog
 
+## 5.0.0 — 2026-11-06
+
+> [!WARNING]
+> **Test this release in your OTE environment before installing it on a live WHMCS.** Install it on a WHMCS that uses the Gateway SRS OTE account, run through domain management (DNSSEC, Domain Lock, Contacts, Auth Code), the setup page and low-funds alerts, and only then upgrade production.
+
+This is the first published release since 4.0.126; it also contains everything listed under 4.1.0, 4.2.0 and 4.2.1 below. Installations on 4.0.x have no updater and must install the full ZIP manually.
+
+**Breaking changes**
+
+- The module now operates in **USD** only. The *Premium cost currency* and *Balance alert currency* settings are removed and any saved values are ignored. Low/critical thresholds are USD. If the Gateway SRS account reports a non-USD balance, the manager shows a configuration alert instead of comparing it; a premium quote in another currency stops the purchase. Confirm your account (OTE and live) reports USD before upgrading.
+
+**Fixes**
+
+- WHMCS 9.1: opening DNSSEC from the domain sidebar no longer ends the session. WHMCS 9.1 CSRF-checks custom module links and destroys the whole PHP session (logging out administrators using *Login as Client*) when the token is missing; the module now adds the token to the sidebar link and to its own DNSSEC button.
+- Domain Lock (and unlock, block/unblock, suspend/unsuspend, transfer approve/reject) failed with HTTP 500 because an empty request body was sent as a JSON list; it is now sent as an object.
+- DNSSEC permission checks use WHMCS's own `checkContactPermission('managedomains', true)`, which works for owners, delegated users and *Login as Client* on WHMCS 8.12 through 9.1.
+
+**Faster pages**
+
+- Contacts: one domain lookup replaces seven API calls (about 1.1 s to 0.2 s on OTE); the domain view already contains each full contact.
+- Auth Code: the stored code from the domain lookup replaces the live registry query (about 5.4 s to 0.2 s on OTE, same code); the live query remains a fallback when no stored code exists.
+
+**New**
+
+- *Generate new code* on the Auth Code page creates and sets a new auth code (POST only, CSRF-checked, not for .za SLDs). Nameservers, contacts and DNSSEC are unchanged. The button needs a small addition to the client theme's `clientareadomaingetepp.tpl`; see the operator guide.
+- Registry 404 alerts: domains the API reports as missing are recorded per environment, administrators receive one digest email for newly missing domains and an admin-area notice, the admin domain tab shows the registry status, and clients see that the domain cannot be managed right now instead of a silently broken page. Entries clear when the registry finds the domain again.
+- DNSSEC page redesigned to the client theme's card layout (published DS records, label-left form, help text); the admin page keeps a Bootstrap 3 layout.
+- Live Playwright acceptance tests click the real sidebar DNSSEC link as a client and through *Login as Client* and assert both sessions survive; session capture now uses the same browser profile as the tests.
+
+Compatibility: checked against WHMCS 8.12.1 and 9.1 behaviour and PHP 8.1 language features. WHMCS 8.6–8.11 were not re-verified for this release.
+
 ## 4.2.1 — 2026-11-06
 
 - Keep the registrar name stable across WHMCS registrar lists, domain selectors and module metadata; show the installed module version separately from `version.json`.

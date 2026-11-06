@@ -37,20 +37,27 @@ final class Lifecycle
         return self::expiry($info) <= time() ? 'Expired' : 'Active';
     }
 
-    public static function sync(DNSAPI $api, string $name): array
+    /** @param callable|null $missing Called when this account cannot see the domain and no other registrar is shown to own it. */
+    public static function sync(DNSAPI $api, string $name, ?callable $missing = null): array
     {
         try {
             $info = $api->view_domain($name);
         } catch (RestAPIException $e) {
             if ($e->getCode() !== 404) { throw $e; }
             // Positive sponsoring-registrar evidence is required. Absence is never proof.
-            $info = $api->registry_domain_info($name);
+            try {
+                $info = $api->registry_domain_info($name);
+            } catch (\Throwable $lookup) {
+                if ($missing) { $missing(); }
+                throw $lookup;
+            }
             if (isset($info['name']) && $info['name'] !== $name) {
                 throw new \RuntimeException('Gateway SRS returned information for another domain.');
             }
             if (is_string($info['rar'] ?? null) && $info['rar'] !== '' && $info['rar'] !== $api->registrarId()) {
                 return ['transferredAway' => true];
             }
+            if ($missing) { $missing(); }
             throw new \RuntimeException('Domain ownership could not be confirmed; synchronization was left unchanged.');
         }
         $expiry = self::expiry($info);
