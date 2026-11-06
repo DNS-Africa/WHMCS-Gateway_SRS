@@ -5,11 +5,27 @@
 > [!WARNING]
 > **Test this release in your OTE environment before installing it on a live WHMCS.** Install it on a WHMCS that uses the Gateway SRS OTE account, run through domain management (DNSSEC, Domain Lock, Contacts, Auth Code), the setup page and low-funds alerts, and only then upgrade production.
 
-This is the first published release since 4.0.126; it also contains everything listed under 4.1.0, 4.2.0 and 4.2.1 below. Installations on 4.0.x have no updater and must install the full ZIP manually.
+This is the first published release since 4.0.126; it also contains everything listed under 4.1.0, 4.2.0 and 4.2.1 below.
 
-**Breaking changes**
+**How to upgrade**
 
-- The module now operates in **USD** only. The *Premium cost currency* and *Balance alert currency* settings are removed and any saved values are ignored. Low/critical thresholds are USD. If the Gateway SRS account reports a non-USD balance, the manager shows a configuration alert instead of comparing it; a premium quote in another currency stops the purchase. Confirm your account (OTE and live) reports USD before upgrading.
+| Installed version | Upgrade to 5.0.0 |
+| --- | --- |
+| 4.2.x | **Addons → Gateway SRS Manager → Check now → Install latest stable release** (see below). |
+| 4.1.x | Install the full ZIP manually, replacing **both** module folders: 5.0.0 needs Gateway SRS Manager 1.1.0, which the 4.1 updater cannot install. |
+| 4.0.x or older | Install the full ZIP manually; these versions have no updater. |
+
+Manual installation: back up your WHMCS files and the existing module, then extract `gateway_srs.zip` into the WHMCS root. It installs `modules/registrars/gateway_srs/` (the registrar) and `modules/addons/gateway_srs_manager/` (Gateway SRS Manager).
+
+**Gateway SRS Manager (admin addon)**
+
+Gateway SRS Manager is the companion admin page for the registrar. It shows the installed and latest module versions, the account balance and low-funds status, and the API token's expiry, and it installs signed updates. Set it up once after a manual installation:
+
+1. Activate the registrar under **Configuration → System Settings → Domain Registrars → Gateway SRS**.
+2. Activate **Gateway SRS Manager** under **Configuration → System Settings → Addon Modules**. In its **Configure** settings, give access only to the administrator roles that manage registrars; those administrators also need the **Configure Domain Registrars** permission.
+3. Open **Addons → Gateway SRS Manager**. Use **Check now** to refresh the release, balance and token status (the daily WHMCS cron also does this).
+4. When a newer release is published, **Install latest stable release** appears. It downloads the release, verifies the publisher's signature and every file, and replaces only the registrar folder; the manager itself is not changed. The registrar's parent folder must be writable by the PHP user; otherwise install manually.
+5. **Restore previous version** puts back the registrar files from before the last install. If an install is interrupted, reopen the manager and use **Recover previous module**.
 
 **Fixes**
 
