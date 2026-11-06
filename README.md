@@ -1,6 +1,9 @@
 # Gateway SRS registrar module for WHMCS
 
-Gateway SRS integrates domain registration, renewal, transfer, contacts, nameservers and pricing with WHMCS. Version 4.2 adds lifecycle and premium-price safeguards, DNSSEC self-service, and account balance monitoring alongside JWT authentication and signed admin updates.
+Gateway SRS integrates domain registration, renewal, transfer, contacts, nameservers and pricing with WHMCS, with DNSSEC self-service, lifecycle and premium-price safeguards, account balance monitoring, JWT authentication and signed admin updates. Version 5.0 fixes DNSSEC and Domain Lock on WHMCS 9.1, makes the Contacts and Auth Code pages much faster, adds **Generate new code** for auth codes and registry-404 alerts, and operates in **USD** only. See the [release notes](https://github.com/DNS-Africa/WHMCS-Gateway_SRS/releases) for the full list.
+
+> [!WARNING]
+> **Test each release in your OTE environment before installing it on a live WHMCS.** Install it on a WHMCS that uses your Gateway SRS OTE account, check domain management (DNSSEC, Domain Lock, Contacts, Auth Code), the setup page and low-funds alerts, and only then upgrade production. Confirm your Gateway SRS account reports its balance in USD before upgrading to 5.0.
 
 ## Requirements and installation
 
@@ -11,7 +14,15 @@ Download the latest stable `gateway_srs.zip` from [GitHub Releases](https://gith
 - `modules/registrars/gateway_srs/`
 - `modules/addons/gateway_srs_manager/`
 
-Install **both directories manually for 4.2**, including when upgrading from 4.1. The new balance and DNSSEC manager pages require companion version 1.1.0 (manager API 2); the 4.1 updater refuses this incompatible manager requirement. Future registrar-only updates preserve this recovery bootstrap. Keep the administrator directory name configured in WHMCS; the module uses relative admin links and does not assume it is named `admin`.
+How to upgrade depends on the installed version:
+
+| Installed | Upgrade to 5.0 |
+| --- | --- |
+| 4.2.x | **Gateway SRS Manager → Install latest stable release** (registrar directory only). |
+| 4.1.x | Install **both directories manually**: 5.0 needs companion manager 1.1.0 (manager API 2), which the 4.1 updater refuses. |
+| 4.0.x or older | Install **both directories manually**; these versions have no updater. |
+
+Future registrar-only updates preserve the manager's recovery bootstrap. Keep the administrator directory name configured in WHMCS; the module uses relative admin links and does not assume it is named `admin`.
 
 Activate Gateway SRS under **Configuration → System Settings → Domain Registrars**. Activate **Gateway SRS Manager** under **Addon Modules**, granting access only to the appropriate administrator roles. The manager also requires the **Configure Domain Registrars** permission, including for update and recovery POST actions.
 
