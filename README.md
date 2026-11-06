@@ -15,6 +15,8 @@ Install **both directories manually for 4.2**, including when upgrading from 4.1
 
 Activate Gateway SRS under **Configuration → System Settings → Domain Registrars**. Activate **Gateway SRS Manager** under **Addon Modules**, granting access only to the appropriate administrator roles. The manager also requires the **Configure Domain Registrars** permission, including for update and recovery POST actions.
 
+The registrar is listed as **Gateway SRS**. Its installed module version appears separately in registrar configuration and the manager; it is independent of the WHMCS application version. Release builds take the module version from `modules/registrars/gateway_srs/version.json` and the product name from `whmcs.json`.
+
 ## Account modes and authentication
 
 Choose the environment explicitly. A token or account from one environment must not be reused in another.
@@ -93,8 +95,12 @@ Monitoring stores token fingerprints, expiry metadata, balance snapshots, notifi
 For durable notification history and recovery across restarts, configure a persistent directory **outside the web root** in WHMCS `configuration.php`:
 
 ```php
-define('GATEWAY_SRS_STATE_DIR', '/private/persistent/path/gateway-srs');
+if (!defined('GATEWAY_SRS_STATE_DIR')) {
+    define('GATEWAY_SRS_STATE_DIR', '/private/persistent/path/gateway-srs');
+}
 ```
+
+Keep the `defined()` guard: WHMCS maintenance tools can load the configuration more than once in a process, and an unguarded definition can stop an update with a duplicate-constant error.
 
 Create it for the PHP worker with permissions 0700. Cron and web PHP must use the same user and directory. Hosts running multiple PHP nodes must share module files, state and reliable filesystem locking; otherwise use the manual deployment process. Preserve this directory alongside module backups. Clearing it resets notification history and removes the updater's recovery journal.
 

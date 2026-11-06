@@ -424,8 +424,15 @@ class DNSAPI
         public function view_domain($domain_name)
         {
             $url = $this->registry_api_url . 'registry/domains/' . rawurlencode($domain_name) . '/';
-            $result = $this->getCH($url);
-            return $result;
+            try {
+                return $this->getCH($url);
+            } catch (RestAPIException $e) {
+                if ($e->getCode() !== 404) { throw $e; }
+                $environment = ['live' => 'production', 'ote' => 'OTE', 'dev' => 'development'][$this->mode];
+                throw new RestAPIException('No domain record is available to this Gateway SRS account in the '
+                    . $environment . ' environment (HTTP 404). Check Account Mode and the domain\'s registrar assignment in the portal.',
+                    404, null, $e);
+            }
         }
 
         /*

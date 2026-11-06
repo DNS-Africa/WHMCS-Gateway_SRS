@@ -3,11 +3,11 @@
     "modules/addons/gateway_srs_manager/Recovery.php": "ed4e9d099ac823c20e650990f2e00f5f001ce7794380eca308d7d15f72a0ff9b",
     "modules/addons/gateway_srs_manager/gateway_srs_manager.php": "e0f74c30c57cd99f0e1fc4501428e0556589060a962af2fc242722e6258475ac",
     "modules/registrars/gateway_srs/dnssec.tpl": "5963055151f69cba8da2a7ea9d312f83abe5f2d6d29254f2ee349c967a0bfa99",
-    "modules/registrars/gateway_srs/gateway_srs.php": "7d413a63cc99101caf57cdfe2152f7d7091da23e7b5d93a32e06c5a200715239",
+    "modules/registrars/gateway_srs/gateway_srs.php": "30dc958879ae279af8257ca57d05e3bdb931128a8d5dcbee6e917574853ee9e9",
     "modules/registrars/gateway_srs/hooks.php": "42f658c625822634464d14c53cd679920b8f23600b2fbf81708cc7022dc28c5d",
     "modules/registrars/gateway_srs/lib/Amount.php": "00389480e4499aa3648ddb279d53fff2398aab606f32c20d9aa2e3b8c45a0945",
     "modules/registrars/gateway_srs/lib/BalanceMonitor.php": "8bdc4b4f77c391f0d0a7133721d1067dca8ad32fa85e699bdbf9b2d2d61e3168",
-    "modules/registrars/gateway_srs/lib/DNSAPI.php": "4687a6e064bbcb020ef2f9b89637a0f81370691768bcbe483917bd587c515ca7",
+    "modules/registrars/gateway_srs/lib/DNSAPI.php": "55973a9f97903daff767a6a604353dce49b8b96f357f392f990766bfc704572b",
     "modules/registrars/gateway_srs/lib/Dnssec.php": "f9722b217aaa83c385f61261d7ce20197fda4bffb0eff7ec7eb7c2fd0e601ffb",
     "modules/registrars/gateway_srs/lib/DnssecException.php": "657ffc43a0f5d36bebb64029e04f401c92a3797eaff64e8334ca3d4e6ef19fc4",
     "modules/registrars/gateway_srs/lib/DnssecPage.php": "e871455586d6856fbba01ea9d8ec75e4709c8e81bffc2489e7f333b68c7d08fc",
@@ -25,14 +25,14 @@
     "modules/registrars/gateway_srs/lib/bootstrap.php": "74fd3deb0864035c71c3c11715bfdbddfedab8cefd9fc5a43174b32afa0c95bb",
     "modules/registrars/gateway_srs/logo.png": "ac04d6379d194c4581e0a9345425175e93f6aa8685f4ace2211e01f23c0e6d33",
     "modules/registrars/gateway_srs/release-public-key.pem": "c8e1fe791651ed2a12ae10ed976c2317c5f26a323edf93da1cb501bcfc67fcbe",
-    "modules/registrars/gateway_srs/version.json": "05ba732e6b880414302d9d2d7877dcd13a792bd1430eabbeb48482d855f75e64",
-    "modules/registrars/gateway_srs/whmcs.json": "1ef7eec46bb1e50159e6a474ba23112d989b15a9016dcb0dfe51936cfbd376f1"
+    "modules/registrars/gateway_srs/version.json": "4cc8892d2e9c2203d26329c9e19afd20c669e2edf245c5dca00a05c399c76f0d",
+    "modules/registrars/gateway_srs/whmcs.json": "c3d7631e46ed45b347f1807ca0912bd19837b1af2bcf96b171f70fb4f9923a32"
   },
   "manager_api": 2,
   "module": "gateway_srs",
   "php_min": "8.1.0",
   "schema": 1,
-  "sha256": "164a7d4fef6fca57acb12645492d281237fb9166676f9b103a00a7c425a342c6",
-  "version": "4.2.0",
+  "sha256": "d1ff79c5e0255bed00b23f82ece18c3a3ad6e4fd70e29e66379c7fea91d64d19",
+  "version": "4.2.1",
   "whmcs_min": "8.6.0"
 }

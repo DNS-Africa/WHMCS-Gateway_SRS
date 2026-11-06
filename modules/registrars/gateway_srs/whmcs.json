@@ -5,7 +5,7 @@
   "license": "proprietary",
   "category": "registrar",
   "description": {
-    "name": "Gateway SRS 4.2.0",
+    "name": "Gateway SRS",
     "tagline": "Manage domains with Gateway SRS. <a href=\"https://portal.gatewaysrs.com/\">Open the portal</a>.",
     "long": "Gateway SRS registrar integration with JWT authentication, lifecycle synchronization, premium price protection, DNSSEC self-service, account balance alerts and signed module updates.",
     "features": [

@@ -1,5 +1,11 @@
 # Changelog
 
+## 4.2.1 — 2026-11-06
+
+- Keep the registrar name stable across WHMCS registrar lists, domain selectors and module metadata; show the installed module version separately from `version.json`.
+- Keep ZIP and unpacked public distribution metadata identical, with release checks that reject versioned product names and stale staged assets.
+- Explain account/environment-specific domain-detail 404 responses without treating them as authentication failures, guessing ownership or changing domain state.
+
 ## 4.2.0 — 2026-11-06
 
 - Synchronize domain lifecycle from EPP and redemption statuses; holds, pending transfers and deletion states no longer reactivate solely because expiry is in the future.

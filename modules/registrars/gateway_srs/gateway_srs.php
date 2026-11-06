@@ -49,9 +49,9 @@
 
     function gateway_srs_MetaData()
     {
-        $meta = json_decode(file_get_contents(__DIR__ . DIRECTORY_SEPARATOR . "whmcs.json"), true);
+        $meta = json_decode(file_get_contents(__DIR__ . DIRECTORY_SEPARATOR . "whmcs.json"), true, 512, JSON_THROW_ON_ERROR);
         return [
-            'DisplayName' => 'Gateway SRS ' . Module::version()['version'],
+            'DisplayName' => $meta['description']['name'],
             'APIVersion' => '1.1',
         ];
     }
@@ -73,16 +73,20 @@
 
     function gateway_srs_getConfigArray()
     {
-        $meta = json_decode(file_get_contents(__DIR__ . DIRECTORY_SEPARATOR . "whmcs.json"), true);
+        $meta = json_decode(file_get_contents(__DIR__ . DIRECTORY_SEPARATOR . "whmcs.json"), true, 512, JSON_THROW_ON_ERROR);
 
         return [
             'FriendlyName' => [
                 'Type' => 'System',
-                'Value' => 'Gateway SRS ' . Module::version()['version']
+                'Value' => $meta['description']['name']
             ],
             'Description' => [
                 'Type' => 'System',
                 'Value' => $meta['description']['tagline']
+            ],
+            'Module_Version' => [
+                'Type' => 'System',
+                'Value' => 'Installed module version: ' . Module::escape(Module::version()['version']),
             ],
             'Authentication' => [
                 'FriendlyName' => 'Authentication', 'Type' => 'dropdown',
