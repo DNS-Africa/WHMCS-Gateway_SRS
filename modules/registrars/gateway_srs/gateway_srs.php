@@ -169,6 +169,8 @@
                 $state->write('legacy-migration', ['complete' => true]);
             }
         } finally { flock($lock, LOCK_UN); fclose($lock); }
+        // Report straight away so a new or upgraded installation appears without waiting for the daily cron.
+        Module::reportInstallation($params);
         return null;
     }
 
@@ -328,13 +330,19 @@
             $domain = array_merge($domain, $agreement);
 
             //  Call The Register Domain Function
-            $api->register_domain($domain);
+            try {
+                $api->register_domain($domain);
+            } catch (RestAPIException $e) {
+                // After a timeout or a registry 5xx the domain may have been created. Report success only when the
+                // registry shows it on this account; otherwise keep the original error.
+                if (!$e->outcomeUnknown() || !Lifecycle::ownedByAccount($api, $domain['name'])) { throw $e; }
+            }
 
             return [
                 'success' => true
             ];
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return [
                 'error' => $e->getMessage()
             ];
@@ -385,7 +393,7 @@
             //  Call The Register Domain Function
             $api->transfer_domain($domain_array);
             return ['success' => true];
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return ['error' => $e->getMessage()];
         }
     }
@@ -415,14 +423,21 @@
 
 
             // Get Domain info
-            $domain_list = $api->list_domains($domain);
+            $row = $api->list_domains($domain)[0] ?? null;
+            $current = is_array($row) ? ($row['curExpDate'] ?? null) : null;
+            if (!is_string($current) || $current === '') {
+                throw new \RuntimeException('Gateway SRS has no current expiry date for this domain on this account, so the renewal was stopped.'
+                    . ' Check Account Mode and the domain\'s registrar assignment in the Gateway SRS portal.');
+            }
+            // EPP's curExpDate only prevents a repeated renewal if it is the date WHMCS expects, not one re-read live.
+            Lifecycle::renewalGuard($current, Module::whmcsExpiry((int) ($params['domainid'] ?? 0)));
 
             // Renew Domain
             $renew_array = [
                 'name' => $domain,
                 'period' => $registrationPeriod,
                 'period_unit' => 'y',
-                'curExpDate' => $domain_list[0]['curExpDate']
+                'curExpDate' => $current
             ];
 
             $renew_array = array_merge($renew_array, PremiumPricing::agreement($api, $params, $domain, 'renew'));
@@ -432,7 +447,7 @@
                 'success' => true
             ];
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return [
                 'error' => $e->getMessage()
             ];
@@ -467,15 +482,17 @@
 
             $count = 0;
             $nameservers = [];
-            foreach ($domain_info['nameservers'] as $namserver) {
+            foreach ($domain_info['nameservers'] ?? [] as $namserver) {
                 $count++;
                 $nameservers['ns' . $count] = $namserver['hostname'];
             }
             return $nameservers;
 
-        } catch (\Exception $e) {
-            if (strpos($e->getMessage(), '404')) {
-                return NULL;
+        } catch (\Throwable $e) {
+            // registry-api answers a missing domain here with 200 and an empty list, but a 404 from any future version
+            // is reported like every other lookup: as an error, and recorded for the registry-missing digest.
+            if ($e instanceof RestAPIException && $e->getCode() === 404) {
+                Module::registryMissing($params, $domain);
             }
             return [
                 'error' => $e->getMessage()
@@ -544,7 +561,7 @@
             $api->update_domain($update_array, $domain);
             return ['success' => 'success'];
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return [
                 'error' => $e->getMessage()
             ];
@@ -597,7 +614,7 @@
                 ];
             }
             return $contacts;
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return ['error' => $e->getMessage()];
         }
     }
@@ -668,7 +685,7 @@
 
             return ['success' => 'success'];
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return [
                 'error' => $e->getMessage()
             ];
@@ -731,7 +748,7 @@
 
             return $results;
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return array(
                 'error' => $e->getMessage()
             );
@@ -778,7 +795,7 @@
                 return 'unlocked';
             }
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return [
                 'error' => $e->getMessage()
             ];
@@ -806,7 +823,7 @@
                 $api->unlock($domain);
             }
             return ['success' => 'success'];
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return [
                 'error' => $e->getMessage()
             ];
@@ -844,7 +861,7 @@
                 return ['error' => 'The registry did not return an EPP code for this domain. Please contact support.'];
             }
             return ['eppcode' => $code];
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return ['error' => $e->getMessage()];
         }
     }
@@ -915,7 +932,7 @@
                 'success' => 'success',
             );
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return [
                 'error' => $e->getMessage()
             ];
@@ -977,7 +994,7 @@
 
             return true;
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return [
                 'error' => $e->getMessage()
             ];
@@ -1048,7 +1065,7 @@
                 'error' => 'No Matching Hostname Was Found'
             ];
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return [
                 'error' => $e->getMessage()
             ];
@@ -1087,10 +1104,11 @@
                     $new_hosts[] = $host;
                 }
             }
-            // Update Domain & Hosts
+            // Update Domain & Hosts. registry-api validates a PATCH as a full domain, so period is required.
             $update_array = [
                 'name' => $domain,
-                'period_unit' => 'y',
+                'period' => $domain_view['period'] ?? 1,
+                'period_unit' => $domain_view['period_unit'] ?? 'y',
                 'hosts' => $new_hosts,
                 'contacts' => $domain_view['contacts'],
             ];
@@ -1098,7 +1116,7 @@
 
             return true;
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return [
                 'error' => $e->getMessage()
             ];
@@ -1159,8 +1177,8 @@
 
             return true;
 
-        } catch (\Exception $e) {
-            throw new \Exception($e->getMessage());
+        } catch (\Throwable $e) {
+            return ['error' => $e->getMessage()];
         }
     }
 
@@ -1201,8 +1219,8 @@
 
             return true;
 
-        } catch (\Exception $e) {
-            throw new \Exception($e->getMessage());
+        } catch (\Throwable $e) {
+            return ['error' => $e->getMessage()];
         }
     }
 
@@ -1253,7 +1271,7 @@
 
             return true;
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return [
                 'error' => $e->getMessage()
             ];
@@ -1276,19 +1294,12 @@
             // Connect To API
             $api = Module::api($params);
 
-            // Get WID
-            $domain_search = $api->list_domains($domain);
-            $domain_wid = $domain_search[0]['wid'];
-
-            // Submit Rejection
-            $domain_info = [
-                'name' => $domain
-            ];
-            $domain_reject = $api->reject_transfer_domain($domain_info, $domain_wid);
+            // Submit Rejection (the endpoint is addressed by name; no wid lookup is needed)
+            $api->reject_transfer_domain(['name' => $domain]);
 
             return true;
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return [
                 'error' => $e->getMessage()
             ];
@@ -1312,23 +1323,12 @@
             $api = Module::api($params);
 
 
-            // Get WID
-            $domain_search = $api->list_domains($domain);
-            $domain_wid = $domain_search[0]['wid'];
+            // Submit Approval (the endpoint is addressed by name; no wid lookup is needed)
+            $api->approve_transfer_domain(['name' => $domain]);
 
-            // Submit Rejection
-            $domain_info = [
-                'name' => $domain
-            ];
+            return ['success' => true];
 
-            $domain_approve = $api->approve_transfer_domain(
-                $domain_info,
-                $domain_wid
-            );
-
-            return $domain_approve;
-
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return [
                 'error' => $e->getMessage()
             ];
@@ -1354,7 +1354,7 @@
             $api->lock($domain);
 
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return [
                 'error' => $e->getMessage()
             ];
@@ -1379,7 +1379,7 @@
 
             $api->unlock($domain);
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return [
                 'error' => $e->getMessage()
             ];
@@ -1400,7 +1400,7 @@
             $api->block($domain);
 
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return [
                 'error' => $e->getMessage()
             ];
@@ -1421,7 +1421,7 @@
             $api->unblock($domain);
 
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return [
                 'error' => $e->getMessage()
             ];
@@ -1476,7 +1476,7 @@
 
             return $result;
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return [
                 'error' => $e->getMessage()
             ];
@@ -1496,7 +1496,7 @@
 
             return $result;
 
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             return [
                 'error' => $e->getMessage()
             ];

@@ -16,6 +16,8 @@ class DNSAPI
     protected string $bearer = '';
     private string $cacheKey;
     private bool $authenticating = false;
+    /** Optional background requests (installation report): no failure logging unless Debug is on, short timeouts. */
+    private bool $quiet = false;
     private $transport;
     private $operationLock;
     private static array $tokens = [];
@@ -131,34 +133,30 @@ class DNSAPI
         }
         $response = $this->send($method, $url, $data);
         $status = (int) $response['status'];
-        if ($this->debug || $status >= 400) {
-            SafeLog::write('API request', ['method' => $method, 'status' => $status, 'retry' => $retried]);
-        }
         $body = $response['body'];
+        $output = null;
+        if ($status < 200 || $status >= 300) {
+            $output = is_array($body) ? $body : json_decode((string) $body, true);
+            $output = is_array($output) ? $output : [];
+        }
+        if ($this->debug || ($status >= 400 && !$this->quiet)) {
+            // The svtrid lets support find the transaction in the registry logs; it carries no request data.
+            SafeLog::write('API request', array_filter(['method' => $method, 'status' => $status, 'retry' => $retried,
+                'svtrid' => $output !== null ? RestAPIException::transactionId($output) : null], static fn ($v) => $v !== null));
+        }
         if ($status === 401 && !$this->authenticating && !$retried && $this->authentication === 'password') {
             unset(self::$tokens[$this->cacheKey]);
             $this->doLogin();
             return $this->request($method, $url, $data, true);
         }
-        if ($status < 200 || $status >= 300) {
-            $output = is_array($body) ? $body : json_decode($body, true);
-            $output = is_array($output) ? $output : [];
+        if ($output !== null) {
             if ($status === 401 && $this->authentication === 'jwt') {
                 throw new RestAPIException('Gateway SRS rejected the JWT. It may be expired or revoked; replace it in the registrar settings.', 401);
             }
             if (($output['error'] ?? '') === '2FA_REQ') {
                 throw new RestAPIException('This account requires two-factor authentication. Use a portal-issued API-user JWT for unattended registrar operations.', 401);
             }
-            $detail = $output['detail'] ?? '';
-            // Do not return arbitrary bodies, field values, credentials or upstream HTML to clients.
-            $known = ['Object exists' => 'Domain already exists.', 'Not found.' => 'Not found.',
-                'Signature has expired.' => 'The API access token has expired.',
-                'No active account found with the given credentials' => 'Unable to log in with provided credentials.'];
-            $message = is_string($detail) ? ($known[$detail] ?? '') : '';
-            if ($message === '') {
-                $message = 'Gateway SRS API request failed (HTTP ' . $status . '). Check the account permissions and request settings.';
-            }
-            throw new RestAPIException($message, $status, $output);
+            throw new RestAPIException(self::errorMessage($status, $output), $status, $output);
         }
         if ($status === 204 || $body === '') {
             return ['http_code' => $status];
@@ -169,6 +167,113 @@ class DNSAPI
         }
         $decoded['http_code'] = $status;
         return $decoded;
+    }
+
+    /**
+     * registry-api returns EPP failures as {"detail": <EPP result message>, "cltrid", "svtrid"}, with the HTTP status
+     * mapped from the EPP result code (register/epp/response/__init__.py), and serializer failures as {"<field>": [...]}.
+     * Do not return arbitrary bodies, field values, credentials or upstream HTML to clients: only fixed wording keyed
+     * on the known messages and statuses, the names of rejected fields, and the transaction reference.
+     */
+    private const KNOWN_DETAILS = [
+        'Object exists' => 'Domain already exists.',
+        'Not found.' => 'Not found.',
+        'Signature has expired.' => 'The API access token has expired.',
+        'No active account found with the given credentials' => 'Unable to log in with provided credentials.',
+        'Billing failure' => 'Gateway SRS could not charge the account for this operation (billing failure). Check the available credit in Gateway SRS Manager.',
+        'Invalid authorization information' => 'The registry rejected the EPP (auth) code.',
+        'Object does not exist' => 'The registry has no such domain or object.',
+        'Object pending transfer' => 'The domain has a pending transfer, so the registry refused this operation.',
+        'Object not pending transfer' => 'The domain has no pending transfer.',
+        'Domain not pending transfer' => 'The domain has no pending transfer.', // rEngin's wording for EPP 2301
+        'Object status prohibits operation' => 'The domain\'s current status (for example a lock, hold or pending action) does not allow this operation.',
+        'Object association prohibits operation' => 'Another registry object depends on this one, so the operation was refused.',
+        'Object is not eligible for renewal' => 'The registry says this domain is not eligible for renewal.',
+        'Object is not eligible for transfer' => 'The registry says this domain is not eligible for transfer.',
+        'Parameter value policy error' => 'The registry policy rejected a value in this request.',
+        'Required parameter missing' => 'The registry rejected the request because a required value was missing.',
+        'Parameter value range error' => 'The registry rejected a value in this request as out of range.',
+        'Parameter value syntax error' => 'The registry rejected a value in this request as badly formatted.',
+        'Command syntax error' => 'The registry could not read the request.',
+        'Command use error' => 'The registry does not allow this operation in the domain\'s current state.',
+        'Unimplemented option' => 'The registry does not support this option for this domain.',
+        'Authorization error' => 'This Gateway SRS account is not authorised for this operation.',
+    ];
+
+    private const STATUS_MESSAGES = [
+        403 => 'This Gateway SRS account is not authorised for this operation.',
+        // DRF's default detail, e.g. "No Domain matches the given query." for an update to a domain not on the account.
+        404 => 'Gateway SRS has no such record for this account in the selected environment. Check Account Mode and the registrar assignment in the portal.',
+        409 => 'The registry refused the request because of the domain\'s current state (for example a lock, a pending transfer or another registrar).',
+        424 => 'Gateway SRS could not charge the account for this operation (billing failure). Check the available credit in Gateway SRS Manager.',
+        429 => 'The registry is busy (session limit reached). Retry in a few minutes.',
+    ];
+
+    public static function errorMessage(int $status, array $output): string
+    {
+        $detail = $output['detail'] ?? null;
+        $message = is_string($detail) ? (self::KNOWN_DETAILS[$detail] ?? '') : '';
+        if ($message === '' && $status === 400 && !isset($output['detail'])) {
+            // Serializer errors are keyed by field name; the names are the module's own request keys.
+            $fields = array_slice(array_filter(array_keys($output), static fn ($k) => is_string($k)
+                && preg_match('/^[a-z_]{1,40}$/D', $k) && $k !== 'non_field_errors'), 0, 5);
+            if ($fields) {
+                $message = 'Gateway SRS rejected the request. Missing or invalid field(s): ' . implode(', ', $fields) . '.';
+            }
+        }
+        if ($message === '') {
+            $message = self::STATUS_MESSAGES[$status] ?? '';
+        }
+        if ($message === '' && $status >= 500) {
+            $message = 'Gateway SRS could not complete the request (HTTP ' . $status . '). The registry may still have processed it:'
+                . ' check the domain before retrying.';
+        }
+        $reasons = self::registryReasons($output);
+        if ($message === '') {
+            $message = $reasons !== [] ? 'The registry rejected the request (HTTP ' . $status . ').'
+                : 'Gateway SRS API request failed (HTTP ' . $status . '). Check the account permissions and request settings.';
+        }
+        if ($reasons !== []) {
+            $message .= (count($reasons) > 1 ? ' Registry reasons: ' : ' Registry reason: ') . implode('; ', $reasons)
+                . (preg_match('/[.!?]$/', end($reasons)) ? '' : '.');
+        }
+        $reference = RestAPIException::transactionId($output);
+        return $reference !== null ? $message . ' (Reference: ' . $reference . ')' : $message;
+    }
+
+    /**
+     * The registry's own explanation of an EPP error, written for registrars: registry-api (from DNS-Africa/registry-api
+     * PR 118) returns rEngin's <extValue> entries as "reasons": [{"reason": "...", "value": "..."}] beside "detail".
+     * Older registry-api releases send no "reasons", and anything malformed is ignored, so the fixed wording stands
+     * alone. A value is kept only when it looks like a domain, host, IP address or handle, so personal data a client
+     * submitted (addresses, e-mail addresses, phone numbers) is not repeated.
+     *
+     * @return string[]
+     */
+    public static function registryReasons(array $output): array
+    {
+        $entries = $output['reasons'] ?? null;
+        if (!is_array($entries) || !array_is_list($entries)) {
+            return [];
+        }
+        $clean = static function ($text): string {
+            if (!is_string($text)) { return ''; }
+            $text = str_replace(['<', '>'], '', strip_tags($text));
+            $text = trim(preg_replace('/[\s\x00-\x1F\x7F]+/u', ' ', $text) ?? '');
+            return preg_match('/^.{301}/us', $text) ? rtrim(preg_replace('/^(.{299}).*$/us', '$1', $text)) . '…' : $text;
+        };
+        $reasons = [];
+        foreach ($entries as $entry) {
+            $reason = $clean(is_array($entry) ? ($entry['reason'] ?? '') : $entry);
+            if ($reason === '') { continue; }
+            $value = is_array($entry) ? $clean($entry['value'] ?? '') : '';
+            if ($value !== '' && preg_match('/^[A-Za-z0-9._:-]{1,253}$/D', $value) && stripos($reason, $value) === false) {
+                $reason .= ' (' . $value . ')';
+            }
+            $reasons[$reason] = $reason;
+            if (count($reasons) === 5) { break; }
+        }
+        return array_values($reasons);
     }
 
     /**
@@ -189,19 +294,48 @@ class DNSAPI
         try {
             curl_setopt_array($ch, [CURLOPT_CUSTOMREQUEST => $method, CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_SSL_VERIFYPEER => true, CURLOPT_SSL_VERIFYHOST => 2, CURLOPT_FOLLOWLOCATION => false,
-                CURLOPT_CONNECTTIMEOUT => 20, CURLOPT_TIMEOUT => 60,
+                CURLOPT_CONNECTTIMEOUT => $this->quiet ? 5 : 20, CURLOPT_TIMEOUT => $this->quiet ? 10 : 60,
+                CURLOPT_USERAGENT => self::userAgent(),
                 CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Accept: application/json', 'Authorization: Bearer ' . $this->bearer]]);
             if ($data !== null) {
                 curl_setopt($ch, CURLOPT_POSTFIELDS, self::encodeBody($data));
             }
             $body = curl_exec($ch);
             if ($body === false) {
-                SafeLog::write('API transport failure', ['event' => 'transport_error']);
-                throw new RestAPIException('Cannot connect to Gateway SRS. Check connectivity and retry; verify the domain state before repeating a purchase.');
+                if ($this->debug || !$this->quiet) {
+                    SafeLog::write('API transport failure', ['event' => 'transport_error']);
+                }
+                throw RestAPIException::noResponse('Cannot connect to Gateway SRS. Check connectivity and retry; verify the domain state before repeating a purchase.');
             }
             return ['status' => curl_getinfo($ch, CURLINFO_RESPONSE_CODE), 'body' => $body];
         } finally {
             unset($ch);
+        }
+    }
+
+    /** Product tokens for Gateway SRS access logs, e.g. "GatewaySRS-WHMCS/5.1.0 WHMCS/8.13.1 PHP/8.3.4". */
+    public static function userAgent(): string
+    {
+        static $agent = null;
+        if ($agent === null) {
+            $whmcs = Module::whmcsVersion();
+            $agent = 'GatewaySRS-WHMCS/' . InstallationReport::cleanVersion(Module::version()['version'])
+                . ($whmcs !== '' ? ' WHMCS/' . $whmcs : '') . ' PHP/' . InstallationReport::cleanVersion(PHP_VERSION);
+        }
+        return $agent;
+    }
+
+    /**
+     * Daily installation report (see InstallationReport); any 2xx is accepted. Quiet: the endpoint may not be
+     * deployed yet, so a 404 or an unreachable portal is not logged unless Debug is on, and it gives up fast.
+     */
+    public function reportInstallation(array $payload): void
+    {
+        $this->quiet = true;
+        try {
+            $this->postCH($this->portal_api_url . 'integrations/installations/', $payload);
+        } finally {
+            $this->quiet = false;
         }
     }
 

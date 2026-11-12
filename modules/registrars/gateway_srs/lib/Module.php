@@ -16,6 +16,20 @@ final class Module
     /** Dependency injection for consumers and offline integration tests; never set from request parameters. */
     public static function setApiFactory(?callable $factory): void { self::$apiFactory = $factory; }
 
+    private static $expiryReader;
+
+    /** Test seam for the WHMCS expiry lookup; never set from request parameters. */
+    public static function setExpiryReader(?callable $reader): void { self::$expiryReader = $reader; }
+
+    /** The expiry date WHMCS holds for a domain (Y-m-d), or null when the domain ID is unknown. */
+    public static function whmcsExpiry(int $domainId): ?string
+    {
+        if ($domainId <= 0) { return null; }
+        if (self::$expiryReader) { return (self::$expiryReader)($domainId); }
+        $value = \WHMCS\Database\Capsule::table('tbldomains')->where('id', $domainId)->value('expirydate');
+        return $value === null ? null : (string) $value;
+    }
+
     private static $redirector;
 
     /** Test seam for redirects; never set from request parameters. */
@@ -83,6 +97,42 @@ final class Module
                 $result = localAPI('SendAdminEmail', ['customsubject' => $subject, 'custommessage' => $body, 'type' => 'system']);
                 return ($result['result'] ?? '') === 'success';
             });
+    }
+
+    /** Canonical WHMCS version, or '' when the application is not available (CLI tooling, tests). */
+    public static function whmcsVersion(): string
+    {
+        try {
+            return class_exists('\App') ? InstallationReport::cleanVersion(\App::getVersion()->getCanonical()) : '';
+        } catch (\Throwable $e) {
+            return '';
+        }
+    }
+
+    public static function installationReport(): InstallationReport
+    {
+        return new InstallationReport(new RuntimeState(),
+            static function (array $settings, array $payload): void { self::api($settings)->reportInstallation($payload); },
+            static fn (): string => self::whmcsVersion(),
+            static function (?string $id = null): ?string {
+                if ($id !== null) {
+                    \WHMCS\Config\Setting::setValue(InstallationReport::SETTING, $id);
+                    return $id;
+                }
+                return (string) \WHMCS\Config\Setting::getValue(InstallationReport::SETTING) ?: null;
+            });
+    }
+
+    /**
+     * Silent best-effort: the installation report must never change the cron run or settings save that triggered it,
+     * and its failures (the endpoint may not be deployed yet) are only logged when Debug is on.
+     */
+    public static function reportInstallation(array $settings): void
+    {
+        try { self::installationReport()->run($settings); }
+        catch (\Throwable $e) {
+            if (!empty($settings['debug'])) { SafeLog::write('Installation report unavailable', ['event' => 'installation_report_error']); }
+        }
     }
 
     public static function registryWatch(): RegistryWatch

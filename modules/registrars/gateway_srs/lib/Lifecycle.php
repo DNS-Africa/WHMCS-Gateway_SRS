@@ -101,4 +101,44 @@ final class Lifecycle
         if (in_array('pendingTransfer', self::codes($info), true)) { return []; }
         return ['completed' => true, 'expirydate' => gmdate('Y-m-d', self::expiry($info))];
     }
+
+    /** Days the registry expiry may run ahead of WHMCS's before a renewal is treated as already done (time zones, sync lag). */
+    public const RENEWAL_DRIFT_DAYS = 30;
+
+    /**
+     * Stop a renewal the registry has probably already applied. A renewal that timed out may still have succeeded;
+     * WHMCS then keeps the old expiry, and re-reading curExpDate live would renew a second time.
+     */
+    public static function renewalGuard(string $registryExpiry, ?string $whmcsExpiry): void
+    {
+        $registry = self::date($registryExpiry);
+        $whmcs = $whmcsExpiry === null ? null : self::date($whmcsExpiry);
+        if ($registry === null || $whmcs === null) { return; } // No usable WHMCS date (for example 0000-00-00): nothing to compare.
+        if ($registry->getTimestamp() - $whmcs->getTimestamp() > self::RENEWAL_DRIFT_DAYS * 86400) {
+            throw new \RuntimeException('The registry expiry date (' . $registry->format('Y-m-d') . ') is later than the WHMCS expiry date ('
+                . $whmcs->format('Y-m-d') . '), so this domain may already have been renewed. The renewal was stopped.'
+                . ' Run Sync for the domain, then retry only if a renewal is still needed.');
+        }
+    }
+
+    private static function date(string $value): ?\DateTimeImmutable
+    {
+        if (!preg_match('/^(\d{4}-\d{2}-\d{2})/', $value, $m) || $m[1] === '0000-00-00') { return null; }
+        $date = \DateTimeImmutable::createFromFormat('!Y-m-d', $m[1], new \DateTimeZone('UTC'));
+        return $date && $date->format('Y-m-d') === $m[1] ? $date : null;
+    }
+
+    /**
+     * After a create whose outcome is unknown: true only when the registry shows the domain on this account.
+     * registry-api's domain view lists only the caller's own domains, and rar is checked when present.
+     */
+    public static function ownedByAccount(DNSAPI $api, string $name): bool
+    {
+        try {
+            $info = $api->view_domain($name);
+        } catch (\Throwable $e) {
+            return false;
+        }
+        return ($info['name'] ?? $name) === $name && (!isset($info['rar']) || $info['rar'] === $api->registrarId());
+    }
 }

@@ -1,9 +1,9 @@
 # Gateway SRS registrar module for WHMCS
 
-Gateway SRS integrates domain registration, renewal, transfer, contacts, nameservers and pricing with WHMCS, with DNSSEC self-service, lifecycle and premium-price safeguards, account balance monitoring, JWT authentication and signed admin updates. Version 5.0 fixes DNSSEC and Domain Lock on WHMCS 9.1, makes the Contacts and Auth Code pages much faster, adds **Generate new code** for auth codes and registry-404 alerts, and operates in **USD** only. See the [release notes](https://github.com/DNS-Africa/WHMCS-Gateway_SRS/releases) for the full list.
+Gateway SRS integrates domain registration, renewal, transfer, contacts, nameservers and pricing with WHMCS, with DNSSEC self-service, lifecycle and premium-price safeguards, account balance monitoring, JWT authentication and signed admin updates. Version 5.1 checks registrations and renewals that time out before they can be repeated, and explains registry errors with the registry's own reason and a transaction reference. Version 5.0 fixed DNSSEC and Domain Lock on WHMCS 9.1, made the Contacts and Auth Code pages much faster, added **Generate new code** for auth codes and registry-404 alerts, and operates in **USD** only. See the [release notes](https://github.com/DNS-Africa/WHMCS-Gateway_SRS/releases) for the full list.
 
 > [!WARNING]
-> **Test each release in your OTE environment before installing it on a live WHMCS.** Install it on a WHMCS that uses your Gateway SRS OTE account, check domain management (DNSSEC, Domain Lock, Contacts, Auth Code), the setup page and low-funds alerts, and only then upgrade production. Confirm your Gateway SRS account reports its balance in USD before upgrading to 5.0.
+> **Test each release in your OTE environment before installing it on a live WHMCS.** Install it on a WHMCS that uses your Gateway SRS OTE account, check domain management (DNSSEC, Domain Lock, Contacts, Auth Code), the setup page and low-funds alerts, and only then upgrade production. Confirm your Gateway SRS account reports its balance in USD before upgrading from 4.x.
 
 ## Requirements and installation
 
@@ -16,10 +16,10 @@ Download the latest stable `gateway_srs.zip` from [GitHub Releases](https://gith
 
 How to upgrade depends on the installed version:
 
-| Installed | Upgrade to 5.0 |
+| Installed | Upgrade to 5.1 |
 | --- | --- |
-| 4.2.x | **Gateway SRS Manager → Install latest stable release** (registrar directory only). |
-| 4.1.x | Install **both directories manually**: 5.0 needs companion manager 1.1.0 (manager API 2), which the 4.1 updater refuses. |
+| 5.0.x or 4.2.x | **Gateway SRS Manager → Install latest stable release** (registrar directory only). |
+| 4.1.x | Install **both directories manually**: 5.1 needs companion manager 1.1.0 (manager API 2), which the 4.1 updater refuses. |
 | 4.0.x or older | Install **both directories manually**; these versions have no updater. |
 
 Future registrar-only updates preserve the manager's recovery bootstrap. Keep the administrator directory name configured in WHMCS; the module uses relative admin links and does not assume it is named `admin`.
@@ -60,6 +60,14 @@ Keep the WHMCS daily cron running. It validates the configured JWT, sends system
 Checks use thresholds, so a missed cron run still detects the current severity. Emails are deduplicated by token, environment and severity. Failed email delivery is retried; replacing a token resets its notification history. Admin notices recalculate expiry on page loads even if cron missed a run. No customer receives token notifications.
 
 The manager shows installed/latest versions, release notes and the last successful release check. **Check now** refreshes status. Release-service failure preserves the last known release and does not interrupt registrar operations.
+
+## Installation report
+
+Once a day, and after you save the registrar settings, the module sends the Gateway SRS portal for the selected Account Mode a short installation report: a random installation ID, the WHMCS, PHP and module versions, the account mode and the authentication method. Gateway SRS uses it to plan support for WHMCS and PHP versions. No domain, client, contact, credential, hostname or URL data is sent. The installation ID is generated once and stored in the WHMCS configuration table.
+
+It is sent again straight away when one of those values changes, for example after an upgrade. The report fails silently: it gives up after 10 seconds, never affects registrar operations or settings validation, and writes nothing to the Module Log unless **Debug** is on. The report is part of the module and has no setting to turn it off.
+
+API requests also identify themselves with a `User-Agent` such as `GatewaySRS-WHMCS/5.1.0 WHMCS/8.13.1 PHP/8.3.14`. The GitHub release check is unchanged and does not send WHMCS or PHP versions.
 
 ## Account balance and low-funds alerts
 

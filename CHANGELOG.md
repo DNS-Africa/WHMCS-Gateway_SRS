@@ -1,5 +1,45 @@
 # Changelog
 
+## 5.1.0 — 2026-11-12
+
+> [!WARNING]
+> **Test this release in your OTE environment before installing it on a live WHMCS.** Install it on a WHMCS that uses the Gateway SRS OTE account, run through registration, renewal, nameserver and child-nameserver changes and a transfer approval, and only then upgrade production.
+
+5.1.0 stops a slow or failed registry response from turning into a second registration or renewal, and error messages in WHMCS now say what the registry refused and why.
+
+**How to upgrade**
+
+| Installed version | Upgrade to 5.1.0 |
+| --- | --- |
+| 5.0.x or 4.2.x | **Addons → Gateway SRS Manager → Check now → Install latest stable release.** Only the registrar folder changes; Gateway SRS Manager stays at 1.1.0. |
+| 4.1.x | Install the full ZIP manually, replacing **both** module folders: 5.1.0 needs Gateway SRS Manager 1.1.0, which the 4.1 updater cannot install. |
+| 4.0.x or older | Install the full ZIP manually; these versions have no updater. |
+
+Upgrading from 4.x? Read the 5.0.0 notes below as well: 5.0 operates in USD only.
+
+**No duplicate registrations or renewals**
+
+- **Registrations that time out are checked.** When a registration times out, or the registry reports a server error, the module checks whether the domain is now on your account. If it is, WHMCS records the registration as done instead of showing an error that invites a second attempt.
+- **No second renewal after a timeout.** If the registry's expiry date is more than 30 days later than the date in WHMCS, the domain has probably been renewed already. The renewal is stopped with a request to run **Sync** first. A renewal for a domain that is not on your account now stops with a clear message instead of sending an empty expiry date.
+
+**Error messages that explain the problem**
+
+- **Clearer registry errors.** Errors now say what the registry refused, for example a billing failure (insufficient credit), an incorrect EPP code, a status that prohibits the change, a pending transfer or a busy registry, instead of only "request failed (HTTP 409)". Rejected request fields are named; their values are not shown.
+- **Registry reasons.** When the registry gives a reason, such as *"Registrant must have a South African address"*, the message includes it. A domain, host or IP address the reason refers to is added in brackets; addresses, e-mail addresses and phone numbers that were submitted are not repeated. Reasons appear once the Gateway SRS registry API sends them; until then you see the messages above.
+- **Transaction reference for support.** Each registry error ends with *(Reference: …)*, the registry's transaction ID, which is also written to the Module Log. Quote it when you contact Gateway SRS support.
+- PHP errors inside registrar functions (for example a `TypeError`) are returned to WHMCS as an error message instead of failing the page. The **Update EPP Key** admin button now shows its error instead of throwing.
+
+**Fixes**
+
+- **Deleting a child nameserver works again.** The registry API rejected the update with HTTP 400 because it did not include the domain's registration period.
+- Approving or rejecting a transfer no longer makes an unneeded domain list lookup first.
+
+**Other changes**
+
+- The module reports its module, WHMCS and PHP versions to Gateway SRS once a day, to help plan version support. No domain, client or credential data is included, and API requests carry the same versions in their `User-Agent`.
+
+Compatibility: tested on WHMCS 9.1 with PHP 8.3, and the automated tests pass on PHP 8.1 to 8.5. Requirements are unchanged from 5.0.0: WHMCS 8.6 or later and PHP 8.1 or later.
+
 ## 5.0.0 — 2026-11-06
 
 > [!WARNING]

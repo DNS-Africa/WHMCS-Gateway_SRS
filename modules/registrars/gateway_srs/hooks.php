@@ -25,6 +25,13 @@ add_hook('DailyCronJob', 1, static function () {
     } catch (\Throwable $e) {
         SafeLog::write('Registry watch digest failed', ['event' => 'registry_watch_error']);
     }
+    try {
+        // Silent: at most once a day unless a reported version changes; failures are logged only with Debug on.
+        $settings = Module::settings();
+        if ($settings) { Module::reportInstallation($settings); }
+    } catch (\Throwable $e) {
+        // Module::settings() failing is already visible through the other cron tasks above.
+    }
 });
 
 add_hook('ClientAreaPrimarySidebar', 1, static function (MenuItem $sidebar) {
