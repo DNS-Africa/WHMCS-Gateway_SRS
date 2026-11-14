@@ -1580,8 +1580,17 @@
     // WHMCS calls <registrar>_AdminDomainsTabFields; "AdminClientDomainsTabFields" is only a hook point name.
     function gateway_srs_AdminDomainsTabFields($params)
     {
-        if (!Module::canManage()) { return []; }
-        $fields = ['DNSSEC' => '<a href="addonmodules.php?module=gateway_srs_manager&amp;domainid='
+        // Links to the client's hosting, email and other services on this domain. WHMCS checks the
+        // admin's service permissions on the linked page, so these are shown to every admin.
+        $related = [];
+        foreach (Module::relatedServices((int) ($params['domainid'] ?? 0)) as $service) {
+            $related[] = '<a href="clientsservices.php?userid=' . $service['userid'] . '&amp;id=' . $service['id'] . '">'
+                . Module::escape($service['name']) . '</a> &ndash; ' . Module::escape($service['domain'])
+                . ' (' . Module::escape($service['status']) . ')';
+        }
+        $relatedField = $related ? ['Related services' => implode('<br>', $related)] : [];
+        if (!Module::canManage()) { return $relatedField; }
+        $fields = $relatedField + ['DNSSEC' => '<a href="addonmodules.php?module=gateway_srs_manager&amp;domainid='
             . (int) ($params['domainid'] ?? 0) . '">Manage DNSSEC records</a>'];
         // These params carry only the domain, not the module settings that select the account environment.
         $settings = Module::settings();

@@ -166,6 +166,41 @@ final class Module
         catch (\Throwable $e) { return null; }
     }
 
+    /**
+     * The domain owner's live services (hosting, email, ...) set up on this domain or one of its subdomains.
+     * WHMCS links a service to a domain only by the text in tblhosting.domain, so services are matched by name.
+     * @return list<array{id: int, userid: int, name: string, domain: string, status: string}>
+     */
+    public static function relatedServices(int $domainId): array
+    {
+        try {
+            $owner = \WHMCS\Database\Capsule::table('tbldomains')->where('id', $domainId)->first(['userid', 'domain']);
+            if (!$owner) { return []; }
+            $domain = strtolower(rtrim(trim((string) $owner->domain), '.'));
+            if ($domain === '') { return []; }
+            $rows = \WHMCS\Database\Capsule::table('tblhosting')
+                ->leftJoin('tblproducts', 'tblproducts.id', '=', 'tblhosting.packageid')
+                ->where('tblhosting.userid', (int) $owner->userid)
+                ->whereNotIn('tblhosting.domainstatus', ['Cancelled', 'Terminated', 'Fraud'])
+                ->where('tblhosting.domain', '!=', '')
+                ->orderBy('tblhosting.id')
+                ->get(['tblhosting.id', 'tblhosting.domain', 'tblhosting.domainstatus', 'tblproducts.name']);
+            $services = [];
+            foreach ($rows as $row) {
+                $host = strtolower(rtrim(trim((string) $row->domain), '.'));
+                if ($host !== $domain && !str_ends_with($host, '.' . $domain)) { continue; }
+                $name = trim((string) ($row->name ?? ''));
+                $services[] = ['id' => (int) $row->id, 'userid' => (int) $owner->userid,
+                    'name' => $name !== '' ? $name : 'Service #' . (int) $row->id,
+                    'domain' => $host, 'status' => (string) $row->domainstatus];
+            }
+            return $services;
+        } catch (\Throwable $e) {
+            // Links are a convenience: a lookup failure must never break the domain page.
+            return [];
+        }
+    }
+
     /** Daily cron: one digest email of domains newly reported missing by the registry. */
     public static function notifyRegistryMissing(array $settings): int
     {

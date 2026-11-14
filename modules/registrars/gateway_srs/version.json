@@ -1,5 +1,5 @@
 {
-  "version": "5.1.0",
+  "version": "5.2.0",
   "php_min": "8.1.0",
   "whmcs_min": "8.6.0",
   "manager_api": 2

@@ -1,5 +1,30 @@
 # Changelog
 
+## 5.2.0 — 2026-11-14
+
+> [!WARNING]
+> **Test this release in your OTE environment before installing it on a live WHMCS.** Install it on a WHMCS that uses the Gateway SRS OTE account, open a domain that has hosting or email on it in both the client area and the admin area, check the new links, and only then upgrade production.
+
+5.2.0 links each domain to the hosting, email and other services that use it, so clients and staff can go straight from the domain to the service.
+
+**How to upgrade**
+
+| Installed version | Upgrade to 5.2.0 |
+| --- | --- |
+| 5.1.x, 5.0.x or 4.2.x | **Addons → Gateway SRS Manager → Check now → Install latest stable release.** Only the registrar folder changes; Gateway SRS Manager stays at 1.1.0. |
+| 4.1.x | Install the full ZIP manually, replacing **both** module folders: 5.2.0 needs Gateway SRS Manager 1.1.0, which the 4.1 updater cannot install. |
+| 4.0.x or older | Install the full ZIP manually; these versions have no updater. |
+
+Upgrading from 4.x? Read the 5.0.0 notes below as well: 5.0 operates in USD only.
+
+**Related services on the domain page**
+
+- **Client area.** A Gateway SRS domain's pages show a **Related Services** panel in the sidebar, listing the client's services on that domain or one of its subdomains with their status. Each entry opens the service's page.
+- **Admin area.** The client's domain tab shows a **Related services** row with a link to each service in **Clients → Products/Services**, its domain and its status. Every administrator who can open the domain sees this row; WHMCS still applies their service permissions on the linked page.
+- **How services are found.** WHMCS links a service to a domain only through the service's *Domain* field, so a service is listed when that field is the domain itself or a subdomain of it (for example `mail.example.com`). Services with an empty or different domain there are not listed, nor are cancelled, terminated or fraud services. Email sold as a product addon rather than as its own product is not listed.
+
+Compatibility: the automated tests pass on PHP 8.1 to 8.5. Requirements are unchanged from 5.0.0: WHMCS 8.6 or later and PHP 8.1 or later.
+
 ## 5.1.0 — 2026-11-12
 
 > [!WARNING]

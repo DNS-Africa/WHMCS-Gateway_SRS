@@ -45,6 +45,16 @@ add_hook('ClientAreaPrimarySidebar', 1, static function (MenuItem $sidebar) {
     if (in_array(ltrim($domain->tld, '.'), ['eu', 'nl', 'co.za'], true) && $details->getChild('Registrar Lock Status')) {
         $details->removeChild('Registrar Lock Status');
     }
+    // Hosting, email and other services on this domain, so the client can go straight to them.
+    $services = Module::relatedServices((int) $domain->id);
+    if (!$services) { return; }
+    $panel = $sidebar->addChild('Gateway SRS Related Services', ['label' => 'Related Services', 'icon' => 'fa-cubes', 'order' => 20]);
+    foreach ($services as $i => $service) {
+        $label = $service['name'] . ($service['domain'] !== strtolower((string) ($domain->domain ?? '')) ? ' (' . $service['domain'] . ')' : '');
+        $panel->addChild('related-service-' . $service['id'], ['label' => Module::escape($label),
+            'uri' => 'clientarea.php?action=productdetails&id=' . $service['id'],
+            'badge' => Module::escape($service['status']), 'order' => ($i + 1) * 10]);
+    }
 });
 
 // Auth Code page: offer "Generate new code" only for Gateway SRS domains that support EPP codes.
